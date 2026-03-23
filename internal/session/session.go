@@ -131,6 +131,25 @@ func (m *Manager) Close(id string) error {
 	return s.Close()
 }
 
+// Detach 斷開 remote session 但不關閉遠端 PTY
+func (m *Manager) Detach(id string) error {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %q not found", id)
+	}
+	delete(m.sessions, id)
+	delete(m.infos, id)
+	m.mu.Unlock()
+
+	if rs, ok := s.(*RemoteSession); ok {
+		return rs.Detach()
+	}
+	// 非 remote session 無法 detach，直接 close
+	return s.Close()
+}
+
 func NewID() string {
 	return uuid.New().String()[:8]
 }

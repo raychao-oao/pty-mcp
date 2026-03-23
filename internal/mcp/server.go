@@ -45,6 +45,7 @@ var toolsList = []map[string]any{
 			"ignore_host_key": map[string]any{"type": "boolean", "description": "Skip known_hosts check (not recommended)"},
 			"persistent": map[string]any{"type": "boolean", "description": "Use ai-tmux for persistent session (survives SSH disconnect)"},
 			"command":    map[string]any{"type": "string", "description": "Initial command for persistent session (default: /bin/bash)"},
+			"session_id": map[string]any{"type": "string", "description": "Attach to existing ai-tmux session by ID (use list_remote_sessions to find IDs)"},
 		},
 		"required": []string{"host", "user"},
 	}},
@@ -76,7 +77,24 @@ var toolsList = []map[string]any{
 		"required": []string{"session_id", "key"},
 	}},
 	{"name": "list_sessions", "description": "列出所有 active sessions", "inputSchema": map[string]any{"type": "object"}},
-	{"name": "close_session", "description": "關閉 session", "inputSchema": map[string]any{
+	{"name": "list_remote_sessions", "description": "列出遠端 ai-tmux server 上的 persistent sessions（可用 session_id 接回）", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"host":            map[string]any{"type": "string", "description": "SSH host IP or hostname"},
+			"port":            map[string]any{"type": "string", "description": "SSH port (default: 22)"},
+			"user":            map[string]any{"type": "string"},
+			"password":        map[string]any{"type": "string", "description": "Optional if using key auth"},
+			"key_path":        map[string]any{"type": "string", "description": "SSH private key path"},
+			"ignore_host_key": map[string]any{"type": "boolean"},
+		},
+		"required": []string{"host", "user"},
+	}},
+	{"name": "close_session", "description": "關閉 session（同時關閉遠端 PTY）", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
+		"required": []string{"session_id"},
+	}},
+	{"name": "detach_session", "description": "斷開 persistent session 但保留遠端 PTY 繼續跑（可用 list_remote_sessions + session_id 接回）", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
 		"required": []string{"session_id"},
@@ -155,8 +173,12 @@ func handleToolCall(h *Handler, req *request) response {
 		result, err = h.SendControl(p.Arguments)
 	case "list_sessions":
 		result, err = h.ListSessions(p.Arguments)
+	case "list_remote_sessions":
+		result, err = h.ListRemoteSessions(p.Arguments)
 	case "close_session":
 		result, err = h.CloseSession(p.Arguments)
+	case "detach_session":
+		result, err = h.DetachSession(p.Arguments)
 	default:
 		return errResp(req.ID, -32601, fmt.Sprintf("unknown tool: %s", p.Name))
 	}

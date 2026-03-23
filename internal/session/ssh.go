@@ -3,6 +3,7 @@ package session
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -306,8 +307,9 @@ func HasAiTmux(cfg SSHConfig) bool {
 	return err == nil
 }
 
-// NewRemoteSSHSession SSH 連上遠端後啟動 ai-tmux client，建立 persistent session
-func NewRemoteSSHSession(cfg SSHConfig, command string) (*RemoteSession, error) {
+// NewRemoteSSHSession SSH 連上遠端後啟動 ai-tmux client，建立或接回 persistent session
+// 若 attachID 非空，則接回已存在的 session；否則建立新 session
+func NewRemoteSSHSession(cfg SSHConfig, command string, attachID string) (*RemoteSession, error) {
 	resolveSSHConfig(&cfg)
 
 	config, err := buildClientConfig(cfg)
@@ -362,21 +364,66 @@ func NewRemoteSSHSession(cfg SSHConfig, command string) (*RemoteSession, error) 
 
 	id := NewID()
 	target := fmt.Sprintf("%s@%s", cfg.User, cfg.Host)
-	if command == "" {
-		command = "/bin/bash"
-	}
 
-	remote, err := NewRemoteSession(id, target, stdinPipe, stdoutPipe, command)
-	if err != nil {
+	var remote *RemoteSession
+	var err2 error
+	if attachID != "" {
+		// 接回已存在的 session
+		remote, err2 = AttachRemoteSession(id, target, stdinPipe, stdoutPipe, attachID)
+	} else {
+		if command == "" {
+			command = "/bin/bash"
+		}
+		remote, err2 = NewRemoteSession(id, target, stdinPipe, stdoutPipe, command)
+	}
+	if err2 != nil {
 		sess.Close()
 		client.Close()
-		return nil, err
+		return nil, err2
 	}
 
 	// 讓 RemoteSession.Close() 時一併關閉 SSH transport（先 session 再 client）
 	remote.SetClosers(sess, client)
 
 	return remote, nil
+}
+
+// ListRemoteAiTmuxSessions SSH 到遠端執行 ai-tmux list，回傳 session 列表
+func ListRemoteAiTmuxSessions(cfg SSHConfig) ([]map[string]any, error) {
+	resolveSSHConfig(&cfg)
+
+	config, err := buildClientConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build SSH config: %w", err)
+	}
+
+	if cfg.Port == "" {
+		cfg.Port = "22"
+	}
+
+	client, err := gossh.Dial("tcp", net.JoinHostPort(cfg.Host, cfg.Port), config)
+	if err != nil {
+		return nil, fmt.Errorf("ssh dial: %w", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("new session: %w", err)
+	}
+	defer sess.Close()
+
+	output, err := sess.Output("ai-tmux list 2>/dev/null")
+	if err != nil {
+		return nil, fmt.Errorf("ai-tmux list: %w", err)
+	}
+
+	var sessions []map[string]any
+	if err := json.Unmarshal(output, &sessions); err != nil {
+		return nil, fmt.Errorf("parse ai-tmux list: %w", err)
+	}
+
+	return sessions, nil
 }
 
 func (s *SSHSession) ID() string   { return s.id }

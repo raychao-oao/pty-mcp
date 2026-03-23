@@ -33,6 +33,31 @@ func (r *RemoteSession) SetClosers(closers ...io.Closer) {
 	r.closers = closers
 }
 
+// AttachRemoteSession 接回已存在的 ai-tmux session（不建立新 session）
+func AttachRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, remoteSessionID string) (*RemoteSession, error) {
+	r := &RemoteSession{
+		id:        id,
+		sessionID: remoteSessionID,
+		target:    target,
+		stdin:     stdin,
+		scanner:   bufio.NewScanner(stdout),
+	}
+	r.scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	r.alive.Store(true)
+
+	// 驗證 session 存在且存活
+	resp, err := r.call("read_output", aitx.ReadOutputParams{
+		SessionID: remoteSessionID,
+		TimeoutMs: 1000,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("attach session %s: %w", remoteSessionID, err)
+	}
+	_ = resp // session exists
+
+	return r, nil
+}
+
 func NewRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, command string) (*RemoteSession, error) {
 	r := &RemoteSession{
 		id:      id,
@@ -175,6 +200,21 @@ func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
 
 func (r *RemoteSession) IsAlive() bool {
 	return r.alive.Load()
+}
+
+// Detach 斷開本機連線但保留遠端 session 繼續跑
+func (r *RemoteSession) Detach() error {
+	var detachErr error
+	r.closeOnce.Do(func() {
+		r.alive.Store(false)
+		// 不送 close_session — 遠端 session 繼續存活
+		for _, c := range r.closers {
+			if err := c.Close(); err != nil && detachErr == nil {
+				detachErr = err
+			}
+		}
+	})
+	return detachErr
 }
 
 func (r *RemoteSession) Close() error {

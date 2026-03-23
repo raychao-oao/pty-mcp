@@ -21,8 +21,9 @@ type CreateSSHParams struct {
 	Password   string `json:"password"`
 	KeyPath    string `json:"key_path"`
 	IgnoreHost bool   `json:"ignore_host_key"`
-	Persistent bool   `json:"persistent"` // 使用 ai-tmux persistent session
-	Command    string `json:"command"`    // persistent 模式的初始指令
+	Persistent bool   `json:"persistent"`  // 使用 ai-tmux persistent session
+	Command    string `json:"command"`     // persistent 模式的初始指令
+	SessionID  string `json:"session_id"`  // 接回已存在的 ai-tmux session
 }
 
 func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
@@ -42,8 +43,8 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 	var err error
 	var sessionType string
 
-	if p.Persistent {
-		s, err = session.NewRemoteSSHSession(cfg, p.Command)
+	if p.Persistent || p.SessionID != "" {
+		s, err = session.NewRemoteSSHSession(cfg, p.Command, p.SessionID)
 		sessionType = "remote"
 	} else {
 		s, err = session.NewSSHSession(cfg)
@@ -56,6 +57,35 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 	target := fmt.Sprintf("%s@%s", p.User, p.Host)
 	h.mgr.Add(s, target)
 	return map[string]string{"session_id": s.ID(), "type": sessionType, "target": target}, nil
+}
+
+type ListRemoteParams struct {
+	Host       string `json:"host"`
+	Port       string `json:"port"`
+	User       string `json:"user"`
+	Password   string `json:"password"`
+	KeyPath    string `json:"key_path"`
+	IgnoreHost bool   `json:"ignore_host_key"`
+}
+
+func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
+	var p ListRemoteParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	cfg := session.SSHConfig{
+		Host:       p.Host,
+		Port:       p.Port,
+		User:       p.User,
+		Password:   p.Password,
+		KeyPath:    p.KeyPath,
+		IgnoreHost: p.IgnoreHost,
+	}
+	sessions, err := session.ListRemoteAiTmuxSessions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return sessions, nil
 }
 
 type CreateSerialParams struct {
@@ -180,6 +210,17 @@ func (h *Handler) CloseSession(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if err := h.mgr.Close(p.SessionID); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"success": true}, nil
+}
+
+func (h *Handler) DetachSession(params json.RawMessage) (any, error) {
+	var p SessionIDParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	if err := h.mgr.Detach(p.SessionID); err != nil {
 		return nil, err
 	}
 	return map[string]bool{"success": true}, nil
