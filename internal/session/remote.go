@@ -123,13 +123,27 @@ func (r *RemoteSession) Write(input string) error {
 	return nil
 }
 
+// rawToKeyName 把 raw bytes 轉回 control key 名稱（reverse lookup）
+var rawToKeyName = map[string]string{
+	"\x03": "ctrl+c", "\x04": "ctrl+d", "\x1a": "ctrl+z",
+	"\x0c": "ctrl+l", "\x12": "ctrl+r", "\r": "enter",
+	"\t": "tab", "\x1b": "escape",
+	"\x1b[A": "up", "\x1b[B": "down", "\x1b[D": "left", "\x1b[C": "right",
+}
+
 func (r *RemoteSession) WriteRaw(data string) error {
 	if !r.alive.Load() {
 		return fmt.Errorf("session is not alive")
 	}
+	// pty-mcp 的 tools.go 已將 key name 轉成 raw bytes，
+	// 但 ai-tmux 的 send_control 需要 key name，所以做 reverse lookup
+	key, ok := rawToKeyName[data]
+	if !ok {
+		return fmt.Errorf("unknown control sequence for remote session")
+	}
 	_, err := r.call("send_control", aitx.SendControlParams{
 		SessionID: r.sessionID,
-		Key:       data,
+		Key:       key,
 	})
 	return err
 }
