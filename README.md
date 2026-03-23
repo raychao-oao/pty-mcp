@@ -2,6 +2,8 @@
 
 An MCP (Model Context Protocol) server that gives AI agents interactive terminal sessions — local shells, SSH, serial ports, and persistent remote sessions that survive disconnects.
 
+![AI agent interacting with Telehack BBS via pty-mcp](docs/screenshots/telehack-cowsay.png)
+
 ## Why
 
 AI coding agents run commands in non-interactive shells. They can't:
