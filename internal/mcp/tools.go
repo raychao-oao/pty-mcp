@@ -67,12 +67,19 @@ func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
 type SendInputParams struct {
 	SessionID string `json:"session_id"`
 	Input     string `json:"input"`
+	TimeoutMs int    `json:"timeout_ms"`
 }
 
 func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	var p SendInputParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
+	}
+	if p.TimeoutMs <= 0 {
+		p.TimeoutMs = 5000
+	}
+	if p.TimeoutMs > 30000 {
+		p.TimeoutMs = 30000
 	}
 	s, err := h.mgr.Get(p.SessionID)
 	if err != nil {
@@ -81,7 +88,8 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	if err := s.Write(p.Input); err != nil {
 		return nil, err
 	}
-	return map[string]any{"output": s.ReadScreen(), "is_alive": s.IsAlive()}, nil
+	output, isComplete := s.ReadScreen(p.TimeoutMs)
+	return map[string]any{"output": output, "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
 type SessionIDParams struct {
@@ -97,7 +105,8 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"output": s.ReadScreen(), "is_alive": s.IsAlive()}, nil
+	output, isComplete := s.ReadScreen(5000)
+	return map[string]any{"output": output, "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
 type SendControlParams struct {
@@ -136,7 +145,8 @@ func (h *Handler) SendControl(params json.RawMessage) (any, error) {
 	if err := s.WriteRaw(seq); err != nil {
 		return nil, err
 	}
-	return map[string]any{"output": s.ReadScreen(), "is_alive": s.IsAlive()}, nil
+	output, isComplete := s.ReadScreen(5000)
+	return map[string]any{"output": output, "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
 func supportedKeys() []string {

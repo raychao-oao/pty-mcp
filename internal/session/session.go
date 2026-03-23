@@ -14,7 +14,7 @@ type Session interface {
 	Type() string // "ssh" | "serial"
 	Write(input string) error    // 送出指令（自動加換行）
 	WriteRaw(data string) error  // 送出原始資料（不加換行，用於控制鍵）
-	ReadScreen() string
+	ReadScreen(timeoutMs int) (output string, isComplete bool)
 	IsAlive() bool
 	Close() error
 }

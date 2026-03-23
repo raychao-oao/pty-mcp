@@ -195,7 +195,7 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 
 	pty.WaitForSettle(func() string {
 		return s.buf.String()
-	}, 300*time.Millisecond, 3*time.Second)
+	}, 300*time.Millisecond, 3*time.Second) // 初始 prompt 等待，忽略 isComplete
 
 	return s, nil
 }
@@ -280,12 +280,15 @@ func (s *SSHSession) WriteRaw(data string) error {
 	return err
 }
 
-func (s *SSHSession) ReadScreen() string {
-	output := pty.WaitForSettle(func() string {
+func (s *SSHSession) ReadScreen(timeoutMs int) (string, bool) {
+	if timeoutMs <= 0 {
+		timeoutMs = 5000
+	}
+	output, isComplete := pty.WaitForSettle(func() string {
 		return s.buf.Since()
-	}, 300*time.Millisecond, 5*time.Second)
-	s.buf.Mark() // 推進 snapshot，下次 read_output 不重複
-	return pty.StripANSI(output)
+	}, 300*time.Millisecond, time.Duration(timeoutMs)*time.Millisecond)
+	s.buf.Mark()
+	return pty.StripANSI(output), isComplete
 }
 
 func (s *SSHSession) IsAlive() bool {

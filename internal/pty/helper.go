@@ -40,7 +40,9 @@ func HasPrompt(output string) bool {
 	return false
 }
 
-func WaitForSettle(getOutput func() string, settle, timeout time.Duration) string {
+// WaitForSettle 等待輸出穩定，回傳 (output, isComplete)
+// isComplete=true 表示 settle 或 prompt 偵測完成，false 表示 timeout
+func WaitForSettle(getOutput func() string, settle, timeout time.Duration) (string, bool) {
 	deadline := time.Now().Add(timeout)
 	last := getOutput()
 	lastChange := time.Now()
@@ -56,13 +58,13 @@ func WaitForSettle(getOutput func() string, settle, timeout time.Duration) strin
 		}
 
 		if time.Since(lastChange) >= settle {
-			return current
+			return current, true
 		}
 
 		if HasPrompt(StripANSI(current)) {
-			return current
+			return current, true
 		}
 	}
 
-	return getOutput()
+	return getOutput(), false
 }

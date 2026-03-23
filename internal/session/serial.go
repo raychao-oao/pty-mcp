@@ -48,7 +48,7 @@ func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
 
 	pty.WaitForSettle(func() string {
 		return s.buf.String()
-	}, 300*time.Millisecond, 2*time.Second)
+	}, 300*time.Millisecond, 2*time.Second) // 初始等待，忽略 isComplete
 
 	return s, nil
 }
@@ -94,12 +94,15 @@ func (s *SerialSession) WriteRaw(data string) error {
 	return err
 }
 
-func (s *SerialSession) ReadScreen() string {
-	output := pty.WaitForSettle(func() string {
+func (s *SerialSession) ReadScreen(timeoutMs int) (string, bool) {
+	if timeoutMs <= 0 {
+		timeoutMs = 5000
+	}
+	output, isComplete := pty.WaitForSettle(func() string {
 		return s.buf.Since()
-	}, 300*time.Millisecond, 5*time.Second)
-	s.buf.Mark() // 推進 snapshot，下次 read_output 不重複
-	return pty.StripANSI(output)
+	}, 300*time.Millisecond, time.Duration(timeoutMs)*time.Millisecond)
+	s.buf.Mark()
+	return pty.StripANSI(output), isComplete
 }
 
 func (s *SerialSession) IsAlive() bool {

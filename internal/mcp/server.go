@@ -54,9 +54,13 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"device"},
 	}},
-	{"name": "send_input", "description": "送入指令並等待輸出 settle", "inputSchema": map[string]any{
+	{"name": "send_input", "description": "送入指令並等待輸出 settle。回傳 is_complete 表示指令是否完成（false 表示 timeout，可用 read_output 取得後續輸出）", "inputSchema": map[string]any{
 		"type": "object",
-		"properties": map[string]any{"session_id": map[string]any{"type": "string"}, "input": map[string]any{"type": "string"}},
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"input":      map[string]any{"type": "string"},
+			"timeout_ms": map[string]any{"type": "integer", "description": "Max wait time in ms (default: 5000, max: 30000)"},
+		},
 		"required": []string{"session_id", "input"},
 	}},
 	{"name": "read_output", "description": "讀取目前 session 畫面（不送入任何指令）", "inputSchema": map[string]any{
