@@ -23,6 +23,12 @@ type RemoteSession struct {
 	alive     atomic.Bool
 	closeOnce sync.Once
 	reqID     int
+	closers   []io.Closer // SSH session + client，Close() 時一併關閉
+}
+
+// SetClosers 設定 Close() 時需要一併關閉的資源（SSH session, client）
+func (r *RemoteSession) SetClosers(closers ...io.Closer) {
+	r.closers = closers
 }
 
 func NewRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, command string) (*RemoteSession, error) {
@@ -142,6 +148,12 @@ func (r *RemoteSession) Close() error {
 		r.call("close_session", aitx.SessionIDParams{
 			SessionID: r.sessionID,
 		})
+		// 關閉 SSH transport
+		for _, c := range r.closers {
+			if err := c.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
 	})
 	return closeErr
 }

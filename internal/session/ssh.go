@@ -361,6 +361,9 @@ func NewRemoteSSHSession(cfg SSHConfig, command string) (*RemoteSession, error) 
 		return nil, err
 	}
 
+	// 讓 RemoteSession.Close() 時一併關閉 SSH transport（先 session 再 client）
+	remote.SetClosers(sess, client)
+
 	return remote, nil
 }
 
