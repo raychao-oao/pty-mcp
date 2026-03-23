@@ -88,6 +88,26 @@ func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
 	return sessions, nil
 }
 
+type CreateLocalParams struct {
+	Command string `json:"command"` // 預設 /bin/bash
+}
+
+func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
+	var p CreateLocalParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	if p.Command == "" {
+		p.Command = "/bin/bash"
+	}
+	s, err := session.NewLocalSession(p.Command)
+	if err != nil {
+		return nil, err
+	}
+	h.mgr.Add(s, p.Command)
+	return map[string]string{"session_id": s.ID(), "type": "local", "command": p.Command}, nil
+}
+
 type CreateSerialParams struct {
 	Device   string `json:"device"`
 	BaudRate int    `json:"baud_rate"`

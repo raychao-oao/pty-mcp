@@ -49,6 +49,12 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"host", "user"},
 	}},
+	{"name": "create_local_session", "description": "開啟本機互動式 terminal session（可跑 bash/python/node 等互動程式）", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"command": map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
+		},
+	}},
 	{"name": "create_serial_session", "description": "開啟 Serial port session", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -163,6 +169,8 @@ func handleToolCall(h *Handler, req *request) response {
 	switch p.Name {
 	case "create_ssh_session":
 		result, err = h.CreateSSHSession(p.Arguments)
+	case "create_local_session":
+		result, err = h.CreateLocalSession(p.Arguments)
 	case "create_serial_session":
 		result, err = h.CreateSerialSession(p.Arguments)
 	case "send_input":
