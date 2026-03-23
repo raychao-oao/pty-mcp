@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	"pty-mcp/internal/aitx"
+	"github.com/raychao-oao/pty-mcp/internal/aitx"
 )
 
 func main() {

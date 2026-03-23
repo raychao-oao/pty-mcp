@@ -2,7 +2,7 @@ package session_test
 
 import (
 	"testing"
-	"pty-mcp/internal/session"
+	"github.com/raychao-oao/pty-mcp/internal/session"
 )
 
 func TestSessionManager_Empty(t *testing.T) {

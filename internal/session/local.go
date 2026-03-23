@@ -2,7 +2,7 @@
 package session
 
 import (
-	"pty-mcp/internal/aitx"
+	"github.com/raychao-oao/pty-mcp/internal/aitx"
 )
 
 // LocalSession wraps aitx.PTYSession to implement the Session interface for a local interactive terminal

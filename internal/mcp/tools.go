@@ -3,7 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
-	"pty-mcp/internal/session"
+	"github.com/raychao-oao/pty-mcp/internal/session"
 )
 
 type Handler struct {

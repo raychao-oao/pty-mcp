@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"pty-mcp/internal/aitx"
+	"github.com/raychao-oao/pty-mcp/internal/aitx"
 )
 
 // RemoteSession operates a remote persistent session via ai-tmux client (SSH stdin/stdout)

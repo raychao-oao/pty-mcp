@@ -17,7 +17,7 @@ import (
 	ssh_config "github.com/kevinburke/ssh_config"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
-	"pty-mcp/internal/pty"
+	"github.com/raychao-oao/pty-mcp/internal/pty"
 )
 
 type SSHConfig struct {

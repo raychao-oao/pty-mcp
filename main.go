@@ -1,8 +1,8 @@
 package main
 
 import (
-	"pty-mcp/internal/mcp"
-	"pty-mcp/internal/session"
+	"github.com/raychao-oao/pty-mcp/internal/mcp"
+	"github.com/raychao-oao/pty-mcp/internal/session"
 )
 
 func main() {

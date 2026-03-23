@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	ptyhelper "pty-mcp/internal/pty"
+	ptyhelper "github.com/raychao-oao/pty-mcp/internal/pty"
 )
 
 type PTYSession struct {

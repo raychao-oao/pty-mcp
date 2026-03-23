@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"go.bug.st/serial"
-	"pty-mcp/internal/pty"
+	"github.com/raychao-oao/pty-mcp/internal/pty"
 )
 
 type SerialSession struct {
