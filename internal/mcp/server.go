@@ -43,6 +43,8 @@ var toolsList = []map[string]any{
 			"password":        map[string]any{"type": "string", "description": "Optional if using key auth"},
 			"key_path":        map[string]any{"type": "string", "description": "SSH private key path (default: ~/.ssh/id_ed25519, id_rsa)"},
 			"ignore_host_key": map[string]any{"type": "boolean", "description": "Skip known_hosts check (not recommended)"},
+			"persistent": map[string]any{"type": "boolean", "description": "Use ai-tmux for persistent session (survives SSH disconnect)"},
+			"command":    map[string]any{"type": "string", "description": "Initial command for persistent session (default: /bin/bash)"},
 		},
 		"required": []string{"host", "user"},
 	}},

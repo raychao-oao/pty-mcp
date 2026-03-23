@@ -259,6 +259,111 @@ func buildHostKeyCallback(cfg SSHConfig) (gossh.HostKeyCallback, error) {
 	return cb, nil
 }
 
+// buildClientConfig 建立 SSH client config（抽出共用邏輯）
+func buildClientConfig(cfg SSHConfig) *gossh.ClientConfig {
+	authMethods, err := buildAuthMethods(cfg)
+	if err != nil {
+		return nil
+	}
+	hostKeyCallback, err := buildHostKeyCallback(cfg)
+	if err != nil {
+		return nil
+	}
+	return &gossh.ClientConfig{
+		User:            cfg.User,
+		Auth:            authMethods,
+		HostKeyCallback: hostKeyCallback,
+		Timeout:         15 * time.Second,
+	}
+}
+
+// HasAiTmux 檢查遠端是否有 ai-tmux binary
+func HasAiTmux(cfg SSHConfig) bool {
+	resolveSSHConfig(&cfg)
+
+	config := buildClientConfig(cfg)
+	if config == nil {
+		return false
+	}
+
+	if cfg.Port == "" {
+		cfg.Port = "22"
+	}
+
+	client, err := gossh.Dial("tcp", net.JoinHostPort(cfg.Host, cfg.Port), config)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		return false
+	}
+	defer sess.Close()
+
+	err = sess.Run("which ai-tmux")
+	return err == nil
+}
+
+// NewRemoteSSHSession SSH 連上遠端後啟動 ai-tmux client，建立 persistent session
+func NewRemoteSSHSession(cfg SSHConfig, command string) (*RemoteSession, error) {
+	resolveSSHConfig(&cfg)
+
+	config := buildClientConfig(cfg)
+	if config == nil {
+		return nil, fmt.Errorf("failed to build SSH config")
+	}
+
+	if cfg.Port == "" {
+		cfg.Port = "22"
+	}
+
+	addr := net.JoinHostPort(cfg.Host, cfg.Port)
+	client, err := gossh.Dial("tcp", addr, config)
+	if err != nil {
+		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
+	}
+
+	sess, err := client.NewSession()
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("new session: %w", err)
+	}
+
+	stdinPipe, err := sess.StdinPipe()
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+
+	stdoutPipe, err := sess.StdoutPipe()
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	if err := sess.Start("ai-tmux client"); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("start ai-tmux: %w", err)
+	}
+
+	id := NewID()
+	target := fmt.Sprintf("%s@%s", cfg.User, cfg.Host)
+	if command == "" {
+		command = "/bin/bash"
+	}
+
+	remote, err := NewRemoteSession(id, target, stdinPipe, stdoutPipe, command)
+	if err != nil {
+		sess.Close()
+		client.Close()
+		return nil, err
+	}
+
+	return remote, nil
+}
+
 func (s *SSHSession) ID() string   { return s.id }
 func (s *SSHSession) Type() string { return "ssh" }
 

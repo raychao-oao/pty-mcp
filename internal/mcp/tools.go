@@ -21,6 +21,8 @@ type CreateSSHParams struct {
 	Password   string `json:"password"`
 	KeyPath    string `json:"key_path"`
 	IgnoreHost bool   `json:"ignore_host_key"`
+	Persistent bool   `json:"persistent"` // 使用 ai-tmux persistent session
+	Command    string `json:"command"`    // persistent 模式的初始指令
 }
 
 func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
@@ -36,13 +38,24 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 		KeyPath:    p.KeyPath,
 		IgnoreHost: p.IgnoreHost,
 	}
-	s, err := session.NewSSHSession(cfg)
+	var s session.Session
+	var err error
+	var sessionType string
+
+	if p.Persistent {
+		s, err = session.NewRemoteSSHSession(cfg, p.Command)
+		sessionType = "remote"
+	} else {
+		s, err = session.NewSSHSession(cfg)
+		sessionType = "ssh"
+	}
+
 	if err != nil {
 		return nil, err
 	}
 	target := fmt.Sprintf("%s@%s", p.User, p.Host)
 	h.mgr.Add(s, target)
-	return map[string]string{"session_id": s.ID(), "type": "ssh", "target": target}, nil
+	return map[string]string{"session_id": s.ID(), "type": sessionType, "target": target}, nil
 }
 
 type CreateSerialParams struct {
