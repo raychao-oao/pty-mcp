@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	ssh_config "github.com/kevinburke/ssh_config"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	"pty-mcp/internal/pty"
@@ -69,7 +70,46 @@ func (lb *lockedBuffer) Mark() {
 	lb.snapshot = lb.buf.Len()
 }
 
+// resolveSSHConfig 從 ~/.ssh/config 填充未提供的欄位
+func resolveSSHConfig(cfg *SSHConfig) {
+	host := cfg.Host
+
+	// HostName: 解析別名到實際地址
+	if hostname := ssh_config.Get(host, "HostName"); hostname != "" {
+		cfg.Host = hostname
+	}
+
+	// Port
+	if cfg.Port == "" {
+		if port := ssh_config.Get(host, "Port"); port != "" {
+			cfg.Port = port
+		}
+	}
+
+	// User
+	if cfg.User == "" {
+		if user := ssh_config.Get(host, "User"); user != "" {
+			cfg.User = user
+		}
+	}
+
+	// IdentityFile
+	if cfg.KeyPath == "" {
+		if keyPath := ssh_config.Get(host, "IdentityFile"); keyPath != "" && keyPath != "~/.ssh/identity" {
+			// 展開 ~
+			if len(keyPath) > 1 && keyPath[0] == '~' {
+				if home, err := os.UserHomeDir(); err == nil {
+					keyPath = filepath.Join(home, keyPath[1:])
+				}
+			}
+			cfg.KeyPath = keyPath
+		}
+	}
+}
+
 func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
+	resolveSSHConfig(&cfg)
+
 	authMethods, err := buildAuthMethods(cfg)
 	if err != nil {
 		return nil, err
