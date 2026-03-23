@@ -24,6 +24,7 @@ type RemoteSession struct {
 	closeOnce sync.Once
 	reqID      int
 	closers    []io.Closer // SSH session + client，Close() 時一併關閉
+	cacheMu    sync.Mutex // 保護 cachedOut
 	cachedOut  *aitx.OutputResult // send_input 回傳的 output，供 ReadScreen 使用
 }
 
@@ -116,7 +117,9 @@ func (r *RemoteSession) Write(input string) error {
 	b, _ := json.Marshal(resp.Result)
 	var result aitx.OutputResult
 	json.Unmarshal(b, &result)
+	r.cacheMu.Lock()
 	r.cachedOut = &result
+	r.cacheMu.Unlock()
 	return nil
 }
 
@@ -133,11 +136,14 @@ func (r *RemoteSession) WriteRaw(data string) error {
 
 func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
 	// 如果有 send_input 快取的 output，直接回傳
+	r.cacheMu.Lock()
 	if r.cachedOut != nil {
 		out := r.cachedOut
 		r.cachedOut = nil
+		r.cacheMu.Unlock()
 		return out.Output, out.IsComplete
 	}
+	r.cacheMu.Unlock()
 
 	resp, err := r.call("read_output", aitx.ReadOutputParams{
 		SessionID: r.sessionID,

@@ -3,6 +3,8 @@ package aitx
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -105,7 +107,9 @@ func (srv *Server) createSession(req *Request) Response {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
 
-	id := fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFFFF)
+	var idBytes [4]byte
+	rand.Read(idBytes[:])
+	id := hex.EncodeToString(idBytes[:])
 	s, err := NewPTYSession(id, p.Name, p.Command)
 	if err != nil {
 		return Response{ID: req.ID, Error: err.Error()}

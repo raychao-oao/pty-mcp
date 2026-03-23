@@ -333,17 +333,29 @@ func NewRemoteSSHSession(cfg SSHConfig, command string) (*RemoteSession, error) 
 
 	stdinPipe, err := sess.StdinPipe()
 	if err != nil {
+		sess.Close()
 		client.Close()
 		return nil, fmt.Errorf("stdin pipe: %w", err)
 	}
 
 	stdoutPipe, err := sess.StdoutPipe()
 	if err != nil {
+		sess.Close()
 		client.Close()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
+	// drain stderr 避免 buffer 滿導致 deadlock
+	stderrPipe, err := sess.StderrPipe()
+	if err != nil {
+		sess.Close()
+		client.Close()
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	go io.Copy(io.Discard, stderrPipe)
+
 	if err := sess.Start("ai-tmux client"); err != nil {
+		sess.Close()
 		client.Close()
 		return nil, fmt.Errorf("start ai-tmux: %w", err)
 	}
