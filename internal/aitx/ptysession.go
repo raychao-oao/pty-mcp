@@ -13,6 +13,7 @@ import (
 
 	"github.com/creack/pty"
 	ptyhelper "pty-mcp/internal/pty"
+	"golang.org/x/sys/unix"
 )
 
 type PTYSession struct {
@@ -81,6 +82,12 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 
 	// 設定終端大小
 	pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
+
+	// 關閉 PTY echo，避免 readline 程式（python, node）產生逐字回顯雜訊
+	if attr, err := unix.IoctlGetTermios(int(ptmx.Fd()), unix.TIOCGETA); err == nil {
+		attr.Lflag &^= unix.ECHO
+		unix.IoctlSetTermios(int(ptmx.Fd()), unix.TIOCSETA, attr)
+	}
 
 	s := &PTYSession{
 		id:        id,
