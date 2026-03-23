@@ -1,0 +1,163 @@
+package mcp
+
+import (
+	"encoding/json"
+	"fmt"
+	"pty-mcp/internal/session"
+)
+
+type Handler struct {
+	mgr *session.Manager
+}
+
+func NewHandler(mgr *session.Manager) *Handler {
+	return &Handler{mgr: mgr}
+}
+
+type CreateSSHParams struct {
+	Host       string `json:"host"`
+	Port       string `json:"port"`
+	User       string `json:"user"`
+	Password   string `json:"password"`
+	KeyPath    string `json:"key_path"`
+	IgnoreHost bool   `json:"ignore_host_key"`
+}
+
+func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
+	var p CreateSSHParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	cfg := session.SSHConfig{
+		Host:       p.Host,
+		Port:       p.Port,
+		User:       p.User,
+		Password:   p.Password,
+		KeyPath:    p.KeyPath,
+		IgnoreHost: p.IgnoreHost,
+	}
+	s, err := session.NewSSHSession(cfg)
+	if err != nil {
+		return nil, err
+	}
+	target := fmt.Sprintf("%s@%s", p.User, p.Host)
+	h.mgr.Add(s, target)
+	return map[string]string{"session_id": s.ID(), "type": "ssh", "target": target}, nil
+}
+
+type CreateSerialParams struct {
+	Device   string `json:"device"`
+	BaudRate int    `json:"baud_rate"`
+}
+
+func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
+	var p CreateSerialParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	s, err := session.NewSerialSession(p.Device, p.BaudRate)
+	if err != nil {
+		return nil, err
+	}
+	target := fmt.Sprintf("%s@%d", p.Device, p.BaudRate)
+	h.mgr.Add(s, target)
+	return map[string]string{"session_id": s.ID(), "type": "serial", "target": target}, nil
+}
+
+type SendInputParams struct {
+	SessionID string `json:"session_id"`
+	Input     string `json:"input"`
+}
+
+func (h *Handler) SendInput(params json.RawMessage) (any, error) {
+	var p SendInputParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	s, err := h.mgr.Get(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Write(p.Input); err != nil {
+		return nil, err
+	}
+	return map[string]any{"output": s.ReadScreen(), "is_alive": s.IsAlive()}, nil
+}
+
+type SessionIDParams struct {
+	SessionID string `json:"session_id"`
+}
+
+func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
+	var p SessionIDParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	s, err := h.mgr.Get(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"output": s.ReadScreen(), "is_alive": s.IsAlive()}, nil
+}
+
+type SendControlParams struct {
+	SessionID string `json:"session_id"`
+	Key       string `json:"key"`
+}
+
+var controlKeys = map[string]string{
+	"ctrl+c": "\x03",
+	"ctrl+d": "\x04",
+	"ctrl+z": "\x1a",
+	"ctrl+l": "\x0c",
+	"ctrl+r": "\x12",
+	"enter":  "\r",
+	"tab":    "\t",
+	"escape": "\x1b",
+	"up":     "\x1b[A",
+	"down":   "\x1b[B",
+	"left":   "\x1b[D",
+	"right":  "\x1b[C",
+}
+
+func (h *Handler) SendControl(params json.RawMessage) (any, error) {
+	var p SendControlParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	seq, ok := controlKeys[p.Key]
+	if !ok {
+		return nil, fmt.Errorf("unknown control key %q, supported: %v", p.Key, supportedKeys())
+	}
+	s, err := h.mgr.Get(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.WriteRaw(seq); err != nil {
+		return nil, err
+	}
+	return map[string]any{"output": s.ReadScreen(), "is_alive": s.IsAlive()}, nil
+}
+
+func supportedKeys() []string {
+	keys := make([]string, 0, len(controlKeys))
+	for k := range controlKeys {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (h *Handler) ListSessions(_ json.RawMessage) (any, error) {
+	return h.mgr.List(), nil
+}
+
+func (h *Handler) CloseSession(params json.RawMessage) (any, error) {
+	var p SessionIDParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	if err := h.mgr.Close(p.SessionID); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"success": true}, nil
+}
