@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ssh_config "github.com/kevinburke/ssh_config"
@@ -27,12 +29,13 @@ type SSHConfig struct {
 }
 
 type SSHSession struct {
-	id      string
-	client  *gossh.Client
-	session *gossh.Session
-	stdin   io.WriteCloser
-	buf     lockedBuffer
-	alive   bool
+	id        string
+	client    *gossh.Client
+	session   *gossh.Session
+	stdin     io.WriteCloser
+	buf       lockedBuffer
+	alive     atomic.Bool
+	closeOnce sync.Once
 }
 
 // lockedBuffer is a thread-safe bytes.Buffer for concurrent SSH stdout/stderr writes
@@ -70,33 +73,41 @@ func (lb *lockedBuffer) Mark() {
 	lb.snapshot = lb.buf.Len()
 }
 
+// SinceAndMark atomically reads since snapshot and advances the snapshot
+func (lb *lockedBuffer) SinceAndMark() string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	b := lb.buf.Bytes()
+	if lb.snapshot >= len(b) {
+		return ""
+	}
+	result := string(b[lb.snapshot:])
+	lb.snapshot = len(b)
+	return result
+}
+
 // resolveSSHConfig 從 ~/.ssh/config 填充未提供的欄位
 func resolveSSHConfig(cfg *SSHConfig) {
 	host := cfg.Host
 
-	// HostName: 解析別名到實際地址
 	if hostname := ssh_config.Get(host, "HostName"); hostname != "" {
 		cfg.Host = hostname
 	}
 
-	// Port
 	if cfg.Port == "" {
 		if port := ssh_config.Get(host, "Port"); port != "" {
 			cfg.Port = port
 		}
 	}
 
-	// User
 	if cfg.User == "" {
 		if user := ssh_config.Get(host, "User"); user != "" {
 			cfg.User = user
 		}
 	}
 
-	// IdentityFile
 	if cfg.KeyPath == "" {
 		if keyPath := ssh_config.Get(host, "IdentityFile"); keyPath != "" && keyPath != "~/.ssh/identity" {
-			// 展開 ~
 			if len(keyPath) > 1 && keyPath[0] == '~' {
 				if home, err := os.UserHomeDir(); err == nil {
 					keyPath = filepath.Join(home, keyPath[1:])
@@ -153,8 +164,8 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 		client:  client,
 		session: sess,
 		stdin:   stdinPipe,
-		alive:   true,
 	}
+	s.alive.Store(true)
 
 	sess.Stdout = &s.buf
 	sess.Stderr = &s.buf
@@ -172,6 +183,15 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 		s.Close()
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
+
+	// 偵測遠端斷線
+	go func() {
+		err := sess.Wait()
+		if err != nil {
+			log.Printf("[pty-mcp] ssh session ended: %v", err)
+		}
+		s.alive.Store(false)
+	}()
 
 	pty.WaitForSettle(func() string {
 		return s.buf.String()
@@ -243,7 +263,7 @@ func (s *SSHSession) ID() string   { return s.id }
 func (s *SSHSession) Type() string { return "ssh" }
 
 func (s *SSHSession) Write(input string) error {
-	if !s.alive {
+	if !s.alive.Load() {
 		return fmt.Errorf("session is not alive")
 	}
 	s.buf.Mark()
@@ -252,7 +272,7 @@ func (s *SSHSession) Write(input string) error {
 }
 
 func (s *SSHSession) WriteRaw(data string) error {
-	if !s.alive {
+	if !s.alive.Load() {
 		return fmt.Errorf("session is not alive")
 	}
 	s.buf.Mark()
@@ -264,23 +284,27 @@ func (s *SSHSession) ReadScreen() string {
 	output := pty.WaitForSettle(func() string {
 		return s.buf.Since()
 	}, 300*time.Millisecond, 5*time.Second)
+	s.buf.Mark() // 推進 snapshot，下次 read_output 不重複
 	return pty.StripANSI(output)
 }
 
 func (s *SSHSession) IsAlive() bool {
-	return s.alive
+	return s.alive.Load()
 }
 
 func (s *SSHSession) Close() error {
-	s.alive = false
-	if s.stdin != nil {
-		s.stdin.Close()
-	}
-	if s.session != nil {
-		s.session.Close()
-	}
-	if s.client != nil {
-		return s.client.Close()
-	}
-	return nil
+	var closeErr error
+	s.closeOnce.Do(func() {
+		s.alive.Store(false)
+		if s.stdin != nil {
+			s.stdin.Close()
+		}
+		if s.session != nil {
+			s.session.Close()
+		}
+		if s.client != nil {
+			closeErr = s.client.Close()
+		}
+	})
+	return closeErr
 }

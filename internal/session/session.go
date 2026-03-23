@@ -54,18 +54,24 @@ func (m *Manager) idleReaper() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
+		// 先收集要關的 session，釋放鎖後再 Close（避免 deadlock）
+		var toClose []Session
 		m.mu.Lock()
 		now := time.Now()
 		for id, info := range m.infos {
 			if now.Sub(info.LastUsed) > m.idleTimeout {
 				if s, ok := m.sessions[id]; ok {
-					s.Close()
+					toClose = append(toClose, s)
 					delete(m.sessions, id)
 					delete(m.infos, id)
 				}
 			}
 		}
 		m.mu.Unlock()
+
+		for _, s := range toClose {
+			s.Close()
+		}
 	}
 }
 
@@ -113,15 +119,16 @@ func (m *Manager) List() []Info {
 
 func (m *Manager) Close(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("session %q not found", id)
 	}
-	err := s.Close()
 	delete(m.sessions, id)
 	delete(m.infos, id)
-	return err
+	m.mu.Unlock()
+
+	return s.Close()
 }
 
 func NewID() string {

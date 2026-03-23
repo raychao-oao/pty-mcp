@@ -3,6 +3,9 @@ package session
 
 import (
 	"fmt"
+	"log"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.bug.st/serial"
@@ -10,11 +13,12 @@ import (
 )
 
 type SerialSession struct {
-	id    string
-	port  serial.Port
-	buf   lockedBuffer
-	alive bool
-	done  chan struct{}
+	id        string
+	port      serial.Port
+	buf       lockedBuffer
+	alive     atomic.Bool
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
@@ -34,11 +38,11 @@ func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
 	}
 
 	s := &SerialSession{
-		id:    NewID(),
-		port:  port,
-		alive: true,
-		done:  make(chan struct{}),
+		id:   NewID(),
+		port: port,
+		done: make(chan struct{}),
 	}
+	s.alive.Store(true)
 
 	go s.readLoop()
 
@@ -58,7 +62,8 @@ func (s *SerialSession) readLoop() {
 		default:
 			n, err := s.port.Read(tmp)
 			if err != nil {
-				s.alive = false
+				s.alive.Store(false)
+				log.Printf("[pty-mcp] serial read error: %v", err)
 				return
 			}
 			if n > 0 {
@@ -72,7 +77,7 @@ func (s *SerialSession) ID() string   { return s.id }
 func (s *SerialSession) Type() string { return "serial" }
 
 func (s *SerialSession) Write(input string) error {
-	if !s.alive {
+	if !s.alive.Load() {
 		return fmt.Errorf("session is not alive")
 	}
 	s.buf.Mark()
@@ -81,7 +86,7 @@ func (s *SerialSession) Write(input string) error {
 }
 
 func (s *SerialSession) WriteRaw(data string) error {
-	if !s.alive {
+	if !s.alive.Load() {
 		return fmt.Errorf("session is not alive")
 	}
 	s.buf.Mark()
@@ -93,15 +98,20 @@ func (s *SerialSession) ReadScreen() string {
 	output := pty.WaitForSettle(func() string {
 		return s.buf.Since()
 	}, 300*time.Millisecond, 5*time.Second)
+	s.buf.Mark() // 推進 snapshot，下次 read_output 不重複
 	return pty.StripANSI(output)
 }
 
 func (s *SerialSession) IsAlive() bool {
-	return s.alive
+	return s.alive.Load()
 }
 
 func (s *SerialSession) Close() error {
-	s.alive = false
-	close(s.done)
-	return s.port.Close()
+	var closeErr error
+	s.closeOnce.Do(func() {
+		s.alive.Store(false)
+		close(s.done)
+		closeErr = s.port.Close()
+	})
+	return closeErr
 }
