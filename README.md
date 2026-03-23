@@ -1,5 +1,7 @@
 # pty-mcp
 
+[![pty-mcp MCP server](https://glama.ai/mcp/servers/raychao-oao/pty-mcp/badges/score.svg)](https://glama.ai/mcp/servers/raychao-oao/pty-mcp)
+
 An MCP (Model Context Protocol) server that gives AI agents interactive terminal sessions — local shells, SSH, serial ports, and persistent remote sessions that survive disconnects.
 
 ![AI agent interacting with Telehack BBS via pty-mcp](docs/screenshots/telehack-cowsay.png)
