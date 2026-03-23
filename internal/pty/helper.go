@@ -7,7 +7,7 @@ import (
 )
 
 var ansiEscape = regexp.MustCompile(
-	`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\r`,
+	`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\r`,
 )
 
 func StripANSI(s string) string {
