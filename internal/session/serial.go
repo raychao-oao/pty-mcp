@@ -48,7 +48,7 @@ func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
 
 	pty.WaitForSettle(func() string {
 		return s.buf.String()
-	}, 300*time.Millisecond, 2*time.Second) // 初始等待，忽略 isComplete
+	}, 300*time.Millisecond, 2*time.Second) // wait for initial output, ignore isComplete
 
 	return s, nil
 }

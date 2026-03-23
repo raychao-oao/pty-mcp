@@ -34,7 +34,7 @@ type toolCallParams struct {
 }
 
 var toolsList = []map[string]any{
-	{"name": "create_ssh_session", "description": "開啟 SSH 互動式 session（支援 key/password 認證）", "inputSchema": map[string]any{
+	{"name": "create_ssh_session", "description": "Open an interactive SSH session (supports key/password auth and SSH config aliases)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"host":            map[string]any{"type": "string", "description": "SSH host IP or hostname"},
@@ -49,13 +49,13 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"host", "user"},
 	}},
-	{"name": "create_local_session", "description": "開啟本機互動式 terminal session（可跑 bash/python/node 等互動程式）", "inputSchema": map[string]any{
+	{"name": "create_local_session", "description": "Open a local interactive terminal session (bash, python3, node, etc.)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"command": map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
 		},
 	}},
-	{"name": "create_serial_session", "description": "開啟 Serial port session", "inputSchema": map[string]any{
+	{"name": "create_serial_session", "description": "Open a serial port session", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"device":    map[string]any{"type": "string", "description": "Serial device path, e.g. /dev/tty.usbserial-XXXX"},
@@ -63,7 +63,7 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"device"},
 	}},
-	{"name": "send_input", "description": "送入指令並等待輸出 settle。回傳 is_complete 表示指令是否完成（false 表示 timeout，可用 read_output 取得後續輸出）", "inputSchema": map[string]any{
+	{"name": "send_input", "description": "Send a command and wait for output to settle. Returns is_complete (false = timeout, use read_output for remaining output)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
@@ -72,18 +72,18 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id", "input"},
 	}},
-	{"name": "read_output", "description": "讀取目前 session 畫面（不送入任何指令）", "inputSchema": map[string]any{
+	{"name": "read_output", "description": "Read current screen output without sending any input", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
 		"required": []string{"session_id"},
 	}},
-	{"name": "send_control", "description": "送入控制鍵（ctrl+c, ctrl+d, enter, tab, up, down...）", "inputSchema": map[string]any{
+	{"name": "send_control", "description": "Send a control key (ctrl+c, ctrl+d, enter, tab, up, down, etc.)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}, "key": map[string]any{"type": "string"}},
 		"required": []string{"session_id", "key"},
 	}},
-	{"name": "list_sessions", "description": "列出所有 active sessions", "inputSchema": map[string]any{"type": "object"}},
-	{"name": "list_remote_sessions", "description": "列出遠端 ai-tmux server 上的 persistent sessions（可用 session_id 接回）", "inputSchema": map[string]any{
+	{"name": "list_sessions", "description": "List all active sessions", "inputSchema": map[string]any{"type": "object"}},
+	{"name": "list_remote_sessions", "description": "List persistent sessions on a remote ai-tmux server (use session_id to reattach)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"host":            map[string]any{"type": "string", "description": "SSH host IP or hostname"},
@@ -95,12 +95,12 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"host", "user"},
 	}},
-	{"name": "close_session", "description": "關閉 session（同時關閉遠端 PTY）", "inputSchema": map[string]any{
+	{"name": "close_session", "description": "Close a session (also terminates remote PTY)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
 		"required": []string{"session_id"},
 	}},
-	{"name": "detach_session", "description": "斷開 persistent session 但保留遠端 PTY 繼續跑（可用 list_remote_sessions + session_id 接回）", "inputSchema": map[string]any{
+	{"name": "detach_session", "description": "Detach from a persistent session but keep the remote PTY running (reattach via list_remote_sessions + session_id)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
 		"required": []string{"session_id"},

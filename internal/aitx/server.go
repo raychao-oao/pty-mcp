@@ -32,7 +32,7 @@ func RunServer(socketPath string, idleSeconds int) error {
 	defer ln.Close()
 	defer os.Remove(socketPath)
 
-	// 設定 socket 權限（只有 owner 可存取）
+	// restrict socket permissions to owner only
 	os.Chmod(socketPath, 0700)
 
 	srv := &Server{
@@ -46,7 +46,7 @@ func RunServer(socketPath string, idleSeconds int) error {
 
 	log.Printf("[ai-tmux] server listening on %s (idle timeout: %ds)", socketPath, idleSeconds)
 
-	// 捕捉 signal 做 graceful shutdown
+	// catch signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {

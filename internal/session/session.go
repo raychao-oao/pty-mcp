@@ -8,18 +8,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// Session 代表一個互動式 terminal session
+// Session represents an interactive terminal session
 type Session interface {
 	ID() string
 	Type() string // "ssh" | "serial"
-	Write(input string) error    // 送出指令（自動加換行）
-	WriteRaw(data string) error  // 送出原始資料（不加換行，用於控制鍵）
+	Write(input string) error    // send a command (newline appended automatically)
+	WriteRaw(data string) error  // send raw data (no newline, used for control keys)
 	ReadScreen(timeoutMs int) (output string, isComplete bool)
 	IsAlive() bool
 	Close() error
 }
 
-// Info 是 session 的 metadata（給 list 用）
+// Info holds session metadata (used by list)
 type Info struct {
 	ID        string    `json:"id"`
 	Type      string    `json:"type"`
@@ -29,7 +29,7 @@ type Info struct {
 	LastUsed  time.Time `json:"last_used"`
 }
 
-// Manager 管理所有 session 的生命週期
+// Manager manages the lifecycle of all sessions
 type Manager struct {
 	mu          sync.RWMutex
 	sessions    map[string]Session
@@ -37,7 +37,7 @@ type Manager struct {
 	idleTimeout time.Duration
 }
 
-// NewManager 建立 SessionManager，idleSeconds 是 idle timeout 秒數（0 表示不 timeout）
+// NewManager creates a SessionManager; idleSeconds is the idle timeout in seconds (0 means no timeout)
 func NewManager(idleSeconds int) *Manager {
 	m := &Manager{
 		sessions:    make(map[string]Session),
@@ -54,7 +54,7 @@ func (m *Manager) idleReaper() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		// 先收集要關的 session，釋放鎖後再 Close（避免 deadlock）
+		// collect sessions to close first, then release lock before calling Close (avoid deadlock)
 		var toClose []Session
 		m.mu.Lock()
 		now := time.Now()
@@ -131,7 +131,7 @@ func (m *Manager) Close(id string) error {
 	return s.Close()
 }
 
-// Detach 斷開 remote session 但不關閉遠端 PTY
+// Detach disconnects the remote session without closing the remote PTY
 func (m *Manager) Detach(id string) error {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
@@ -146,7 +146,7 @@ func (m *Manager) Detach(id string) error {
 	if rs, ok := s.(*RemoteSession); ok {
 		return rs.Detach()
 	}
-	// 非 remote session 無法 detach，直接 close
+	// non-remote sessions cannot be detached, close directly
 	return s.Close()
 }
 

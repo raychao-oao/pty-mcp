@@ -19,7 +19,7 @@ func main() {
 	}
 
 	socketPath := aitx.SocketPath
-	// 簡單的 flag 解析
+	// simple flag parsing
 	for i, arg := range os.Args {
 		if arg == "--socket" && i+1 < len(os.Args) {
 			socketPath = os.Args[i+1]

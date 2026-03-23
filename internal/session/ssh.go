@@ -87,7 +87,7 @@ func (lb *lockedBuffer) SinceAndMark() string {
 	return result
 }
 
-// resolveSSHConfig 從 ~/.ssh/config 填充未提供的欄位
+// resolveSSHConfig fills missing fields from ~/.ssh/config
 func resolveSSHConfig(cfg *SSHConfig) {
 	host := cfg.Host
 
@@ -185,7 +185,7 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
 
-	// 偵測遠端斷線
+	// detect remote disconnection
 	go func() {
 		err := sess.Wait()
 		if err != nil {
@@ -196,7 +196,7 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 
 	pty.WaitForSettle(func() string {
 		return s.buf.String()
-	}, 300*time.Millisecond, 3*time.Second) // 初始 prompt 等待，忽略 isComplete
+	}, 300*time.Millisecond, 3*time.Second) // wait for initial prompt, ignore isComplete
 
 	return s, nil
 }
@@ -224,7 +224,8 @@ func buildAuthMethods(cfg SSHConfig) ([]gossh.AuthMethod, error) {
 		}
 		signer, err := gossh.ParsePrivateKey(data)
 		if err != nil {
-			return nil, fmt.Errorf("parse key %s: %w", kp, err)
+			log.Printf("[pty-mcp] skipping key %s: %v", kp, err)
+			continue // skip encrypted/unsupported keys, try next
 		}
 		methods = append(methods, gossh.PublicKeys(signer))
 	}
@@ -260,7 +261,7 @@ func buildHostKeyCallback(cfg SSHConfig) (gossh.HostKeyCallback, error) {
 	return cb, nil
 }
 
-// buildClientConfig 建立 SSH client config（抽出共用邏輯）
+// buildClientConfig creates an SSH client config (extracted shared logic)
 func buildClientConfig(cfg SSHConfig) (*gossh.ClientConfig, error) {
 	authMethods, err := buildAuthMethods(cfg)
 	if err != nil {
@@ -278,7 +279,7 @@ func buildClientConfig(cfg SSHConfig) (*gossh.ClientConfig, error) {
 	}, nil
 }
 
-// HasAiTmux 檢查遠端是否有 ai-tmux binary
+// HasAiTmux checks whether the remote host has the ai-tmux binary
 func HasAiTmux(cfg SSHConfig) bool {
 	resolveSSHConfig(&cfg)
 
@@ -307,8 +308,8 @@ func HasAiTmux(cfg SSHConfig) bool {
 	return err == nil
 }
 
-// NewRemoteSSHSession SSH 連上遠端後啟動 ai-tmux client，建立或接回 persistent session
-// 若 attachID 非空，則接回已存在的 session；否則建立新 session
+// NewRemoteSSHSession connects via SSH and starts an ai-tmux client to create or reattach a persistent session.
+// If attachID is non-empty, reattaches to an existing session; otherwise creates a new one.
 func NewRemoteSSHSession(cfg SSHConfig, command string, attachID string) (*RemoteSession, error) {
 	resolveSSHConfig(&cfg)
 
@@ -347,7 +348,7 @@ func NewRemoteSSHSession(cfg SSHConfig, command string, attachID string) (*Remot
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
-	// drain stderr 避免 buffer 滿導致 deadlock
+	// drain stderr to prevent buffer-full deadlock
 	stderrPipe, err := sess.StderrPipe()
 	if err != nil {
 		sess.Close()
@@ -368,7 +369,7 @@ func NewRemoteSSHSession(cfg SSHConfig, command string, attachID string) (*Remot
 	var remote *RemoteSession
 	var err2 error
 	if attachID != "" {
-		// 接回已存在的 session
+		// reattach to an existing session
 		remote, err2 = AttachRemoteSession(id, target, stdinPipe, stdoutPipe, attachID)
 	} else {
 		if command == "" {
@@ -382,13 +383,13 @@ func NewRemoteSSHSession(cfg SSHConfig, command string, attachID string) (*Remot
 		return nil, err2
 	}
 
-	// 讓 RemoteSession.Close() 時一併關閉 SSH transport（先 session 再 client）
+	// close SSH transport (session then client) when RemoteSession.Close() is called
 	remote.SetClosers(sess, client)
 
 	return remote, nil
 }
 
-// ListRemoteAiTmuxSessions SSH 到遠端執行 ai-tmux list，回傳 session 列表
+// ListRemoteAiTmuxSessions SSHes to the remote host, runs ai-tmux list, and returns the session list
 func ListRemoteAiTmuxSessions(cfg SSHConfig) ([]map[string]any, error) {
 	resolveSSHConfig(&cfg)
 

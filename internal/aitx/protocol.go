@@ -3,29 +3,31 @@ package aitx
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 )
 
-const SocketPath = "/tmp/ai-tmux.sock"
+var SocketPath = fmt.Sprintf("/tmp/ai-tmux-%d.sock", os.Getuid())
 
-// Request 從 client 到 server
+// Request from client to server
 type Request struct {
 	ID     string          `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
 }
 
-// Response 從 server 到 client
+// Response from server to client
 type Response struct {
 	ID     string `json:"id"`
 	Result any    `json:"result,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
 
-// --- Params 結構 ---
+// --- Params ---
 
 type CreateSessionParams struct {
-	Command string `json:"command"` // 預設 "/bin/bash"
-	Name    string `json:"name"`    // 可選，session 名稱
+	Command string `json:"command"` // default: "/bin/bash"
+	Name    string `json:"name"`    // optional session name
 }
 
 type SendInputParams struct {
@@ -48,7 +50,7 @@ type SessionIDParams struct {
 	SessionID string `json:"session_id"`
 }
 
-// --- Result 結構 ---
+// --- Results ---
 
 type SessionResult struct {
 	SessionID string `json:"session_id"`

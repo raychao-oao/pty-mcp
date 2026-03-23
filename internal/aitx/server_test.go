@@ -18,7 +18,7 @@ func TestServer_ListEmpty(t *testing.T) {
 
 	go aitx.RunServer(sock, 300) // 300s idle timeout
 
-	// 等 server 啟動
+	// wait for server to start
 	time.Sleep(200 * time.Millisecond)
 
 	conn, err := net.Dial("unix", sock)
@@ -27,7 +27,7 @@ func TestServer_ListEmpty(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// 送 list_sessions
+	// send list_sessions
 	req := aitx.Request{ID: "t1", Method: "list_sessions"}
 	json.NewEncoder(conn).Encode(req)
 

@@ -12,10 +12,10 @@ import (
 	"time"
 )
 
-// RunClient 橋接 stdin/stdout ↔ Unix socket
-// 如果 server 沒在跑，自動啟動
+// RunClient bridges stdin/stdout to a Unix socket.
+// Automatically starts the server if it is not running.
 func RunClient(socketPath string) error {
-	// 確保 server 在跑
+	// ensure the server is running
 	if err := ensureServer(socketPath); err != nil {
 		return err
 	}
@@ -26,7 +26,7 @@ func RunClient(socketPath string) error {
 	}
 	defer conn.Close()
 
-	// stdin → socket
+	// forward stdin to socket
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
 		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -37,7 +37,7 @@ func RunClient(socketPath string) error {
 		conn.Close()
 	}()
 
-	// socket → stdout
+	// forward socket to stdout
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	for scanner.Scan() {
@@ -48,16 +48,16 @@ func RunClient(socketPath string) error {
 	return nil
 }
 
-// ensureServer 檢查 server 是否在跑，沒有就啟動
+// ensureServer checks whether the server is running and starts it if not
 func ensureServer(socketPath string) error {
-	// 嘗試連線
+	// try to connect
 	conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond)
 	if err == nil {
 		conn.Close()
-		return nil // server 已在跑
+		return nil // server is already running
 	}
 
-	// 啟動 server daemon
+	// start server daemon
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find executable: %w", err)
@@ -66,14 +66,14 @@ func ensureServer(socketPath string) error {
 	cmd := exec.Command(self, "server", "--socket", socketPath, "--idle-timeout", "1800")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	// 用新 process group 讓 daemon 獨立存活
+	// use a new process group so the daemon survives independently
 	cmd.SysProcAttr = newDaemonAttr()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start server: %w", err)
 	}
 	cmd.Process.Release() // detach
 
-	// 等 server 啟動
+	// wait for server to start
 	for i := 0; i < 20; i++ {
 		time.Sleep(100 * time.Millisecond)
 		conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
@@ -87,7 +87,7 @@ func ensureServer(socketPath string) error {
 	return fmt.Errorf("server failed to start within 2s")
 }
 
-// ListSessions 快速列出 sessions（給 CLI 用）
+// ListSessions quickly lists sessions (for CLI use)
 func ListSessions(socketPath string) error {
 	conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond)
 	if err != nil {

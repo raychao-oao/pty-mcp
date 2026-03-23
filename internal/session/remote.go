@@ -12,28 +12,28 @@ import (
 	"pty-mcp/internal/aitx"
 )
 
-// RemoteSession 透過 ai-tmux client（SSH stdin/stdout）操作遠端 persistent session
+// RemoteSession operates a remote persistent session via ai-tmux client (SSH stdin/stdout)
 type RemoteSession struct {
 	id        string
-	sessionID string // ai-tmux server 上的 session ID
+	sessionID string // session ID on the ai-tmux server
 	target    string
 	stdin     io.Writer
 	scanner   *bufio.Scanner
-	mu        sync.Mutex // 保護 request/response 配對
+	mu        sync.Mutex // protects request/response pairing
 	alive     atomic.Bool
 	closeOnce sync.Once
 	reqID      int
-	closers    []io.Closer // SSH session + client，Close() 時一併關閉
-	cacheMu    sync.Mutex // 保護 cachedOut
-	cachedOut  *aitx.OutputResult // send_input 回傳的 output，供 ReadScreen 使用
+	closers    []io.Closer // SSH session + client, closed together on Close()
+	cacheMu    sync.Mutex // protects cachedOut
+	cachedOut  *aitx.OutputResult // output returned by send_input, used by ReadScreen
 }
 
-// SetClosers 設定 Close() 時需要一併關閉的資源（SSH session, client）
+// SetClosers sets resources (SSH session, client) to be closed together on Close()
 func (r *RemoteSession) SetClosers(closers ...io.Closer) {
 	r.closers = closers
 }
 
-// AttachRemoteSession 接回已存在的 ai-tmux session（不建立新 session）
+// AttachRemoteSession reattaches to an existing ai-tmux session (does not create a new one)
 func AttachRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, remoteSessionID string) (*RemoteSession, error) {
 	r := &RemoteSession{
 		id:        id,
@@ -45,7 +45,7 @@ func AttachRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, r
 	r.scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	r.alive.Store(true)
 
-	// 驗證 session 存在且存活
+	// verify that the session exists and is alive
 	resp, err := r.call("read_output", aitx.ReadOutputParams{
 		SessionID: remoteSessionID,
 		TimeoutMs: 1000,
@@ -68,7 +68,7 @@ func NewRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, comm
 	r.scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	r.alive.Store(true)
 
-	// 在遠端建立 session
+	// create a session on the remote
 	resp, err := r.call("create_session", aitx.CreateSessionParams{
 		Command: command,
 		Name:    target,
@@ -77,7 +77,7 @@ func NewRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, comm
 		return nil, fmt.Errorf("create remote session: %w", err)
 	}
 
-	// 解析 session_id
+	// parse session_id
 	b, _ := json.Marshal(resp.Result)
 	var result aitx.SessionResult
 	json.Unmarshal(b, &result)
@@ -127,6 +127,28 @@ func (r *RemoteSession) call(method string, params any) (*aitx.Response, error) 
 func (r *RemoteSession) ID() string   { return r.id }
 func (r *RemoteSession) Type() string { return "remote" }
 
+// WriteWithTimeout sends input with a specific timeout for settle detection
+func (r *RemoteSession) WriteWithTimeout(input string, timeoutMs int) error {
+	if !r.alive.Load() {
+		return fmt.Errorf("session is not alive")
+	}
+	resp, err := r.call("send_input", aitx.SendInputParams{
+		SessionID: r.sessionID,
+		Input:     input,
+		TimeoutMs: timeoutMs,
+	})
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(resp.Result)
+	var result aitx.OutputResult
+	json.Unmarshal(b, &result)
+	r.cacheMu.Lock()
+	r.cachedOut = &result
+	r.cacheMu.Unlock()
+	return nil
+}
+
 func (r *RemoteSession) Write(input string) error {
 	if !r.alive.Load() {
 		return fmt.Errorf("session is not alive")
@@ -138,7 +160,7 @@ func (r *RemoteSession) Write(input string) error {
 	if err != nil {
 		return err
 	}
-	// 快取 send_input 回傳的 output，供後續 ReadScreen 使用
+	// cache output returned by send_input for subsequent ReadScreen calls
 	b, _ := json.Marshal(resp.Result)
 	var result aitx.OutputResult
 	json.Unmarshal(b, &result)
@@ -148,7 +170,7 @@ func (r *RemoteSession) Write(input string) error {
 	return nil
 }
 
-// rawToKeyName 把 raw bytes 轉回 control key 名稱（reverse lookup）
+// rawToKeyName converts raw bytes back to control key names (reverse lookup)
 var rawToKeyName = map[string]string{
 	"\x03": "ctrl+c", "\x04": "ctrl+d", "\x1a": "ctrl+z",
 	"\x0c": "ctrl+l", "\x12": "ctrl+r", "\r": "enter",
@@ -160,8 +182,8 @@ func (r *RemoteSession) WriteRaw(data string) error {
 	if !r.alive.Load() {
 		return fmt.Errorf("session is not alive")
 	}
-	// pty-mcp 的 tools.go 已將 key name 轉成 raw bytes，
-	// 但 ai-tmux 的 send_control 需要 key name，所以做 reverse lookup
+	// tools.go in pty-mcp converts key names to raw bytes,
+	// but ai-tmux send_control requires key names, so reverse lookup is needed
 	key, ok := rawToKeyName[data]
 	if !ok {
 		return fmt.Errorf("unknown control sequence for remote session")
@@ -174,7 +196,7 @@ func (r *RemoteSession) WriteRaw(data string) error {
 }
 
 func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
-	// 如果有 send_input 快取的 output，直接回傳
+	// return cached output from send_input if available
 	r.cacheMu.Lock()
 	if r.cachedOut != nil {
 		out := r.cachedOut
@@ -202,12 +224,12 @@ func (r *RemoteSession) IsAlive() bool {
 	return r.alive.Load()
 }
 
-// Detach 斷開本機連線但保留遠端 session 繼續跑
+// Detach disconnects the local connection while keeping the remote session alive
 func (r *RemoteSession) Detach() error {
 	var detachErr error
 	r.closeOnce.Do(func() {
 		r.alive.Store(false)
-		// 不送 close_session — 遠端 session 繼續存活
+		// do not send close_session — remote session stays alive
 		for _, c := range r.closers {
 			if err := c.Close(); err != nil && detachErr == nil {
 				detachErr = err
@@ -224,7 +246,7 @@ func (r *RemoteSession) Close() error {
 		r.call("close_session", aitx.SessionIDParams{
 			SessionID: r.sessionID,
 		})
-		// 關閉 SSH transport
+		// close SSH transport
 		for _, c := range r.closers {
 			if err := c.Close(); err != nil && closeErr == nil {
 				closeErr = err

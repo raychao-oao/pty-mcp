@@ -40,8 +40,8 @@ func HasPrompt(output string) bool {
 	return false
 }
 
-// WaitForSettle 等待輸出穩定，回傳 (output, isComplete)
-// isComplete=true 表示 settle 或 prompt 偵測完成，false 表示 timeout
+// WaitForSettle waits for output to stabilize and returns (output, isComplete).
+// isComplete=true means output settled or a prompt was detected; false means timeout.
 func WaitForSettle(getOutput func() string, settle, timeout time.Duration) (string, bool) {
 	deadline := time.Now().Add(timeout)
 	last := getOutput()

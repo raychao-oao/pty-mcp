@@ -21,9 +21,9 @@ type CreateSSHParams struct {
 	Password   string `json:"password"`
 	KeyPath    string `json:"key_path"`
 	IgnoreHost bool   `json:"ignore_host_key"`
-	Persistent bool   `json:"persistent"`  // 使用 ai-tmux persistent session
-	Command    string `json:"command"`     // persistent 模式的初始指令
-	SessionID  string `json:"session_id"`  // 接回已存在的 ai-tmux session
+	Persistent bool   `json:"persistent"`  // use ai-tmux persistent session
+	Command    string `json:"command"`     // initial command in persistent mode
+	SessionID  string `json:"session_id"`  // reattach to an existing ai-tmux session
 }
 
 func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
@@ -89,7 +89,7 @@ func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
 }
 
 type CreateLocalParams struct {
-	Command string `json:"command"` // 預設 /bin/bash
+	Command string `json:"command"` // default /bin/bash
 }
 
 func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
@@ -147,6 +147,14 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	s, err := h.mgr.Get(p.SessionID)
 	if err != nil {
 		return nil, err
+	}
+	// RemoteSession: pass timeout_ms to ai-tmux server's send_input
+	if rs, ok := s.(*session.RemoteSession); ok {
+		if err := rs.WriteWithTimeout(p.Input, p.TimeoutMs); err != nil {
+			return nil, err
+		}
+		output, isComplete := rs.ReadScreen(p.TimeoutMs)
+		return map[string]any{"output": output, "is_alive": rs.IsAlive(), "is_complete": isComplete}, nil
 	}
 	if err := s.Write(p.Input); err != nil {
 		return nil, err

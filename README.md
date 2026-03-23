@@ -158,7 +158,7 @@ create_ssh_session(host: "myserver", user: "admin")
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.25+
 - For serial: appropriate device permissions
 - For persistent sessions: `ai-tmux` binary on remote server
 

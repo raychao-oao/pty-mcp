@@ -5,7 +5,7 @@ import (
 	"pty-mcp/internal/aitx"
 )
 
-// LocalSession 包裝 aitx.PTYSession 實作 Session interface，提供本機互動式 terminal
+// LocalSession wraps aitx.PTYSession to implement the Session interface for a local interactive terminal
 type LocalSession struct {
 	id  string
 	pty *aitx.PTYSession

@@ -28,7 +28,7 @@ type PTYSession struct {
 	lastUsed  atomic.Value // time.Time
 }
 
-// safeBuffer 線程安全 buffer（與 ssh.go 的 lockedBuffer 相同概念）
+// safeBuffer is a thread-safe buffer (same concept as lockedBuffer in ssh.go)
 type safeBuffer struct {
 	mu       sync.Mutex
 	data     []byte
@@ -79,7 +79,7 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 		return nil, fmt.Errorf("start pty %q: %w", command, err)
 	}
 
-	// 設定終端大小
+	// set terminal size
 	pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
 
 	s := &PTYSession{
@@ -93,7 +93,7 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 	s.alive.Store(true)
 	s.lastUsed.Store(time.Now())
 
-	// 背景讀取 PTY 輸出
+	// read PTY output in background
 	go func() {
 		tmp := make([]byte, 4096)
 		for {
@@ -111,13 +111,13 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 		}
 	}()
 
-	// 偵測 process 結束
+	// detect process exit
 	go func() {
 		s.cmd.Wait()
 		s.alive.Store(false)
 	}()
 
-	// 等初始 prompt
+	// wait for initial prompt
 	ptyhelper.WaitForSettle(func() string {
 		return s.buf.String()
 	}, 300*time.Millisecond, 2*time.Second)
