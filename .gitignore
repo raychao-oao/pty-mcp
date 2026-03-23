@@ -1,2 +1,6 @@
 pty-mcp
 /ai-tmux
+pty-mcp-linux
+ai-tmux-linux
+pty-mcp-linux-arm64
+ai-tmux-linux-arm64
