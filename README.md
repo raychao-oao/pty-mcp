@@ -4,6 +4,8 @@ An MCP (Model Context Protocol) server that gives AI agents interactive terminal
 
 ![AI agent interacting with Telehack BBS via pty-mcp](docs/screenshots/telehack-cowsay.png)
 
+[![pty-mcp MCP server](https://glama.ai/mcp/servers/raychao-oao/pty-mcp/badges/card.svg)](https://glama.ai/mcp/servers/raychao-oao/pty-mcp)
+
 ## Why
 
 AI coding agents run commands in non-interactive shells. They can't:
