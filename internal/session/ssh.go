@@ -260,29 +260,29 @@ func buildHostKeyCallback(cfg SSHConfig) (gossh.HostKeyCallback, error) {
 }
 
 // buildClientConfig 建立 SSH client config（抽出共用邏輯）
-func buildClientConfig(cfg SSHConfig) *gossh.ClientConfig {
+func buildClientConfig(cfg SSHConfig) (*gossh.ClientConfig, error) {
 	authMethods, err := buildAuthMethods(cfg)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	hostKeyCallback, err := buildHostKeyCallback(cfg)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	return &gossh.ClientConfig{
 		User:            cfg.User,
 		Auth:            authMethods,
 		HostKeyCallback: hostKeyCallback,
 		Timeout:         15 * time.Second,
-	}
+	}, nil
 }
 
 // HasAiTmux 檢查遠端是否有 ai-tmux binary
 func HasAiTmux(cfg SSHConfig) bool {
 	resolveSSHConfig(&cfg)
 
-	config := buildClientConfig(cfg)
-	if config == nil {
+	config, err := buildClientConfig(cfg)
+	if err != nil {
 		return false
 	}
 
@@ -310,9 +310,9 @@ func HasAiTmux(cfg SSHConfig) bool {
 func NewRemoteSSHSession(cfg SSHConfig, command string) (*RemoteSession, error) {
 	resolveSSHConfig(&cfg)
 
-	config := buildClientConfig(cfg)
-	if config == nil {
-		return nil, fmt.Errorf("failed to build SSH config")
+	config, err := buildClientConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build SSH config: %w", err)
 	}
 
 	if cfg.Port == "" {
