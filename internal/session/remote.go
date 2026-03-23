@@ -22,8 +22,9 @@ type RemoteSession struct {
 	mu        sync.Mutex // 保護 request/response 配對
 	alive     atomic.Bool
 	closeOnce sync.Once
-	reqID     int
-	closers   []io.Closer // SSH session + client，Close() 時一併關閉
+	reqID      int
+	closers    []io.Closer // SSH session + client，Close() 時一併關閉
+	cachedOut  *aitx.OutputResult // send_input 回傳的 output，供 ReadScreen 使用
 }
 
 // SetClosers 設定 Close() 時需要一併關閉的資源（SSH session, client）
@@ -104,11 +105,19 @@ func (r *RemoteSession) Write(input string) error {
 	if !r.alive.Load() {
 		return fmt.Errorf("session is not alive")
 	}
-	_, err := r.call("send_input", aitx.SendInputParams{
+	resp, err := r.call("send_input", aitx.SendInputParams{
 		SessionID: r.sessionID,
 		Input:     input,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// 快取 send_input 回傳的 output，供後續 ReadScreen 使用
+	b, _ := json.Marshal(resp.Result)
+	var result aitx.OutputResult
+	json.Unmarshal(b, &result)
+	r.cachedOut = &result
+	return nil
 }
 
 func (r *RemoteSession) WriteRaw(data string) error {
@@ -123,6 +132,13 @@ func (r *RemoteSession) WriteRaw(data string) error {
 }
 
 func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
+	// 如果有 send_input 快取的 output，直接回傳
+	if r.cachedOut != nil {
+		out := r.cachedOut
+		r.cachedOut = nil
+		return out.Output, out.IsComplete
+	}
+
 	resp, err := r.call("read_output", aitx.ReadOutputParams{
 		SessionID: r.sessionID,
 		TimeoutMs: timeoutMs,
