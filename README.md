@@ -54,17 +54,25 @@ Persistent mode (ai-tmux):
 
 ## Quick Start
 
-### Build
+### Install (pre-built binary)
 
 ```bash
-go build -o pty-mcp .
-go build -o ai-tmux ./cmd/ai-tmux/  # optional, for persistent sessions
+curl -fsSL https://raw.githubusercontent.com/raychao-oao/pty-mcp/main/install.sh | sh
+```
+
+Or download from [GitHub Releases](https://github.com/raychao-oao/pty-mcp/releases).
+
+### Install (from source)
+
+```bash
+go install github.com/raychao-oao/pty-mcp@latest
+go install github.com/raychao-oao/pty-mcp/cmd/ai-tmux@latest  # optional, for persistent sessions
 ```
 
 ### Register with Claude Code
 
 ```bash
-claude mcp add pty-mcp -- /path/to/pty-mcp
+claude mcp add pty-mcp -- pty-mcp
 ```
 
 ### Usage Examples
