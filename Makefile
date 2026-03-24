@@ -1,17 +1,19 @@
 .PHONY: build build-all clean test install
 
+VERSION ?= dev
+
 build:
-	go build -o pty-mcp .
+	go build -ldflags "-X main.version=$(VERSION)" -o pty-mcp .
 
 build-all: build
 	go build -o ai-tmux ./cmd/ai-tmux/
 
 build-linux:
-	GOOS=linux GOARCH=amd64 go build -o pty-mcp-linux .
+	GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o pty-mcp-linux .
 	GOOS=linux GOARCH=amd64 go build -o ai-tmux-linux ./cmd/ai-tmux/
 
 build-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build -o pty-mcp-linux-arm64 .
+	GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=$(VERSION)" -o pty-mcp-linux-arm64 .
 	GOOS=linux GOARCH=arm64 go build -o ai-tmux-linux-arm64 ./cmd/ai-tmux/
 
 test:
