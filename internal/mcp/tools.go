@@ -222,9 +222,9 @@ func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForPa
 	ctx, cancel := context.WithTimeout(context.Background(), params.Timeout)
 	defer cancel()
 
-	// Use snapshot=0 to read ALL existing buffer content first, then advance
-	// to current position so the main loop only picks up new writes.
-	snapshot := int64(0)
+	// Start from markSnapshot — where ReadScreen last left off.
+	// Only match "unread" output, not stale data from earlier commands.
+	snapshot := rb.MarkSnapshot()
 	truncated := false
 	var remainder string
 	maxCollected := params.ContextLines + params.TailLines + 100

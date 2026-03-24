@@ -178,6 +178,14 @@ func (rb *RingBuffer) Since() string {
 	return rb.ReadSince(snap)
 }
 
+// MarkSnapshot returns the current mark position. Used by waitForPattern to
+// start reading from where ReadScreen last left off (unread data only).
+func (rb *RingBuffer) MarkSnapshot() int64 {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	return rb.markSnapshot
+}
+
 // Mark advances the markSnapshot to the current written position. Subsequent
 // calls to Since will return only data written after this point. Used for
 // WaitForSettle compatibility.

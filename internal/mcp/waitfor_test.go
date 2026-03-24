@@ -106,6 +106,51 @@ func TestWaitForPattern_PartialLine(t *testing.T) {
 	}
 }
 
+func TestWaitForPattern_SkipsStaleData(t *testing.T) {
+	rb := buffer.NewRingBuffer(1024)
+	// Simulate: send_input wrote output and Mark() was called (ReadScreen does this)
+	rb.Write([]byte("old SUCCESS output\n"))
+	rb.Mark() // ReadScreen advances mark past old data
+
+	// Now wait_for should NOT match the old "SUCCESS"
+	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+		WaitFor: "SUCCESS",
+		Timeout: 300 * time.Millisecond,
+	})
+
+	if result.Matched {
+		t.Fatal("should NOT match stale data after Mark()")
+	}
+	if result.Error == "" {
+		t.Fatal("expected timeout")
+	}
+}
+
+func TestWaitForPattern_MatchesNewDataAfterMark(t *testing.T) {
+	rb := buffer.NewRingBuffer(1024)
+	// Old output, already read
+	rb.Write([]byte("old data\n"))
+	rb.Mark()
+
+	// New output arrives async
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		rb.Write([]byte("new SUCCESS here\n"))
+	}()
+
+	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+		WaitFor: "SUCCESS",
+		Timeout: 2 * time.Second,
+	})
+
+	if !result.Matched {
+		t.Fatalf("should match new data after Mark(), got error: %s", result.Error)
+	}
+	if result.MatchLine != "new SUCCESS here" {
+		t.Fatalf("got %q, want %q", result.MatchLine, "new SUCCESS here")
+	}
+}
+
 func TestWaitForPattern_SessionDead(t *testing.T) {
 	rb := buffer.NewRingBuffer(1024)
 	alive := true
