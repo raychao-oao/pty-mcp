@@ -27,6 +27,8 @@ pty-mcp solves all of these by providing real PTY sessions over MCP.
 | **Attach/Detach** | Detach from a running session, reconnect later |
 | **Control keys** | Send ctrl+c, ctrl+d, arrow keys, tab, escape |
 | **Settle detection** | Waits for output to settle before returning (smart timeout) |
+| **Pattern matching** | `wait_for` blocks until a regex pattern appears in output (v0.2.0) |
+| **Bounded memory** | Ring buffer prevents OOM on long-running sessions (v0.2.0) |
 
 ## Architecture
 
@@ -138,6 +140,17 @@ send_input(session_id, "top")
 send_control(session_id, "ctrl+c")        → stop top
 ```
 
+**Wait for pattern (v0.2.0):**
+```
+create_local_session("ping myserver")
+read_output(session_id, wait_for: "bytes from", timeout: 300)
+→ blocks until server responds or 5 min timeout
+
+send_input(session_id, "docker-compose up")
+read_output(session_id, wait_for: "ready|error", timeout: 60, context_lines: 3)
+→ returns matched line + 3 lines of context
+```
+
 **Persistent session (survives SSH disconnect):**
 ```
 create_ssh_session(host: "server", user: "admin", persistent: true)
@@ -158,7 +171,7 @@ send_input(session_id, "echo $?")         → check build result
 | `create_ssh_session` | SSH to a remote host (supports SSH config aliases) |
 | `create_serial_session` | Connect to a serial port device |
 | `send_input` | Send a command and wait for output to settle |
-| `read_output` | Read current screen output without sending input |
+| `read_output` | Read output, optionally wait for a pattern (`wait_for`, `timeout`, `context_lines`, `tail_lines`) |
 | `send_control` | Send control keys (ctrl+c, ctrl+d, arrows, tab, etc.) |
 | `list_sessions` | List all active sessions |
 | `close_session` | Close a session (terminates remote PTY) |
