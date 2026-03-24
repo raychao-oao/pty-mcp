@@ -2,7 +2,10 @@
 package session
 
 import (
+	"context"
+
 	"github.com/raychao-oao/pty-mcp/internal/aitx"
+	"github.com/raychao-oao/pty-mcp/internal/buffer"
 )
 
 // LocalSession wraps aitx.PTYSession to implement the Session interface for a local interactive terminal
@@ -42,3 +45,6 @@ func (s *LocalSession) IsAlive() bool {
 func (s *LocalSession) Close() error {
 	return s.pty.Close()
 }
+
+func (s *LocalSession) Buffer() *buffer.RingBuffer { return s.pty.Buffer() }
+func (s *LocalSession) PollRemote(_ context.Context) {} // no-op for local

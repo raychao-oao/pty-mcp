@@ -3,6 +3,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/raychao-oao/pty-mcp/internal/aitx"
+	"github.com/raychao-oao/pty-mcp/internal/buffer"
 )
 
 // RemoteSession operates a remote persistent session via ai-tmux client (SSH stdin/stdout)
@@ -255,3 +257,9 @@ func (r *RemoteSession) Close() error {
 	})
 	return closeErr
 }
+
+// Buffer returns nil for RemoteSession — output is retrieved via RPC, not a local buffer.
+func (r *RemoteSession) Buffer() *buffer.RingBuffer { return nil }
+
+// PollRemote is a no-op for RemoteSession — output polling is handled by ReadScreen via RPC.
+func (r *RemoteSession) PollRemote(_ context.Context) {}

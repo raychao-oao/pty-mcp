@@ -1,22 +1,26 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/raychao-oao/pty-mcp/internal/buffer"
 )
 
 // Session represents an interactive terminal session
 type Session interface {
 	ID() string
-	Type() string // "ssh" | "serial"
+	Type() string // "ssh" | "serial" | "local" | "remote"
 	Write(input string) error    // send a command (newline appended automatically)
 	WriteRaw(data string) error  // send raw data (no newline, used for control keys)
 	ReadScreen(timeoutMs int) (output string, isComplete bool)
 	IsAlive() bool
 	Close() error
+	Buffer() *buffer.RingBuffer
+	PollRemote(ctx context.Context)
 }
 
 // Info holds session metadata (used by list)
