@@ -72,9 +72,15 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id", "input"},
 	}},
-	{"name": "read_output", "description": "Read current screen output without sending any input", "inputSchema": map[string]any{
+	{"name": "read_output", "description": "Read current screen output. Optionally wait for a regex pattern to appear in the output.", "inputSchema": map[string]any{
 		"type": "object",
-		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
+		"properties": map[string]any{
+			"session_id":    map[string]any{"type": "string", "description": "Session ID to read from"},
+			"timeout":       map[string]any{"type": "number", "description": "Max wait time in seconds (default: 5, max: 600)"},
+			"wait_for":      map[string]any{"type": "string", "description": "Regex pattern to wait for. Falls back to plain text match if regex is invalid."},
+			"context_lines": map[string]any{"type": "integer", "description": "Lines before/after matched line to include (default: 0, max: 50). Only with wait_for."},
+			"tail_lines":    map[string]any{"type": "integer", "description": "On timeout, include last N lines of output (default: 0, max: 100). Only with wait_for."},
+		},
 		"required": []string{"session_id"},
 	}},
 	{"name": "send_control", "description": "Send a control key (ctrl+c, ctrl+d, enter, tab, up, down, etc.)", "inputSchema": map[string]any{
