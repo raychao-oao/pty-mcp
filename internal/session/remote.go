@@ -9,6 +9,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/raychao-oao/pty-mcp/internal/aitx"
 	"github.com/raychao-oao/pty-mcp/internal/buffer"
@@ -28,6 +29,8 @@ type RemoteSession struct {
 	closers    []io.Closer // SSH session + client, closed together on Close()
 	cacheMu    sync.Mutex // protects cachedOut
 	cachedOut  *aitx.OutputResult // output returned by send_input, used by ReadScreen
+	localBuf   *buffer.RingBuffer
+	isPolling  atomic.Bool
 }
 
 // SetClosers sets resources (SSH session, client) to be closed together on Close()
@@ -43,6 +46,7 @@ func AttachRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, r
 		target:    target,
 		stdin:     stdin,
 		scanner:   bufio.NewScanner(stdout),
+		localBuf:  buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
 	}
 	r.scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	r.alive.Store(true)
@@ -62,10 +66,11 @@ func AttachRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, r
 
 func NewRemoteSession(id, target string, stdin io.Writer, stdout io.Reader, command string) (*RemoteSession, error) {
 	r := &RemoteSession{
-		id:      id,
-		target:  target,
-		stdin:   stdin,
-		scanner: bufio.NewScanner(stdout),
+		id:       id,
+		target:   target,
+		stdin:    stdin,
+		scanner:  bufio.NewScanner(stdout),
+		localBuf: buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
 	}
 	r.scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	r.alive.Store(true)
@@ -204,6 +209,7 @@ func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
 		out := r.cachedOut
 		r.cachedOut = nil
 		r.cacheMu.Unlock()
+		r.localBuf.Write([]byte(out.Output)) // feed local buffer
 		return out.Output, out.IsComplete
 	}
 	r.cacheMu.Unlock()
@@ -219,6 +225,7 @@ func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
 	b, _ := json.Marshal(resp.Result)
 	var result aitx.OutputResult
 	json.Unmarshal(b, &result)
+	r.localBuf.Write([]byte(result.Output)) // feed local buffer
 	return result.Output, result.IsComplete
 }
 
@@ -258,8 +265,29 @@ func (r *RemoteSession) Close() error {
 	return closeErr
 }
 
-// Buffer returns nil for RemoteSession — output is retrieved via RPC, not a local buffer.
-func (r *RemoteSession) Buffer() *buffer.RingBuffer { return nil }
+// Buffer returns the local RingBuffer that accumulates output from ReadScreen calls.
+func (r *RemoteSession) Buffer() *buffer.RingBuffer { return r.localBuf }
 
-// PollRemote is a no-op for RemoteSession — output polling is handled by ReadScreen via RPC.
-func (r *RemoteSession) PollRemote(_ context.Context) {}
+// PollRemote continuously polls the remote session for output, feeding the local buffer.
+// It is safe to call concurrently — only one goroutine will poll at a time.
+func (r *RemoteSession) PollRemote(ctx context.Context) {
+	if !r.isPolling.CompareAndSwap(false, true) {
+		return // already polling
+	}
+	defer r.isPolling.Store(false)
+
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !r.alive.Load() {
+				return
+			}
+			r.ReadScreen(500) // short timeout, result written to localBuf
+		}
+	}
+}
