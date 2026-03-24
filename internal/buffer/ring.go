@@ -194,3 +194,16 @@ func (rb *RingBuffer) Mark() {
 	defer rb.mu.Unlock()
 	rb.markSnapshot = rb.written
 }
+
+// AdvanceMarkBy moves the markSnapshot forward by n bytes from its current position.
+// Unlike Mark() which jumps to the latest write position, this only advances by
+// the exact amount consumed, preventing a race where data arriving between
+// WaitForSettle returning and Mark being called gets silently skipped.
+func (rb *RingBuffer) AdvanceMarkBy(n int64) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	rb.markSnapshot += n
+	if rb.markSnapshot > rb.written {
+		rb.markSnapshot = rb.written
+	}
+}

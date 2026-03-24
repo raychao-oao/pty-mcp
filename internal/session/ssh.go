@@ -389,7 +389,7 @@ func (s *SSHSession) Write(input string) error {
 		return fmt.Errorf("session is not alive")
 	}
 	s.buf.Mark()
-	_, err := fmt.Fprint(s.stdin, input+"\n")
+	_, err := fmt.Fprint(s.stdin, input+"\r")
 	return err
 }
 
@@ -409,7 +409,7 @@ func (s *SSHSession) ReadScreen(timeoutMs int) (string, bool) {
 	output, isComplete := pty.WaitForSettle(func() string {
 		return s.buf.Since()
 	}, 300*time.Millisecond, time.Duration(timeoutMs)*time.Millisecond)
-	s.buf.Mark()
+	s.buf.AdvanceMarkBy(int64(len(output)))
 	return pty.StripANSI(output), isComplete
 }
 

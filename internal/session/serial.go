@@ -104,7 +104,7 @@ func (s *SerialSession) ReadScreen(timeoutMs int) (string, bool) {
 	output, isComplete := pty.WaitForSettle(func() string {
 		return s.buf.Since()
 	}, 300*time.Millisecond, time.Duration(timeoutMs)*time.Millisecond)
-	s.buf.Mark()
+	s.buf.AdvanceMarkBy(int64(len(output)))
 	return pty.StripANSI(output), isComplete
 }
 

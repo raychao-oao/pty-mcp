@@ -106,7 +106,7 @@ func (s *PTYSession) Write(input string) error {
 	}
 	s.buf.Mark()
 	s.lastUsed.Store(time.Now())
-	_, err := s.ptyFile.WriteString(input + "\n")
+	_, err := s.ptyFile.WriteString(input + "\r")
 	return err
 }
 
@@ -128,7 +128,7 @@ func (s *PTYSession) ReadScreen(timeoutMs int) (string, bool) {
 	output, isComplete := ptyhelper.WaitForSettle(func() string {
 		return s.buf.Since()
 	}, 300*time.Millisecond, time.Duration(timeoutMs)*time.Millisecond)
-	s.buf.Mark()
+	s.buf.AdvanceMarkBy(int64(len(output)))
 	return ptyhelper.StripANSI(output), isComplete
 }
 
