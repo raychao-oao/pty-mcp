@@ -58,25 +58,63 @@ Persistent mode (ai-tmux):
 
 ## Quick Start
 
-### Install (pre-built binary)
+**One-line install + register** (macOS / Linux / WSL2):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/raychao-oao/pty-mcp/main/install.sh | sh
+claude mcp add pty-mcp -- /usr/local/bin/pty-mcp
 ```
 
-Or download from [GitHub Releases](https://github.com/raychao-oao/pty-mcp/releases).
+That's it. Restart Claude Code and the tools are available.
 
-### Install (from source)
+<details>
+<summary><b>Other install methods</b></summary>
+
+**Download from GitHub Releases:**
+
+Go to [Releases](https://github.com/raychao-oao/pty-mcp/releases), download the binary for your platform, and make it executable:
+
+| Platform | Binary |
+|----------|--------|
+| macOS (Apple Silicon) | `pty-mcp-darwin-arm64` |
+| macOS (Intel) | `pty-mcp-darwin-amd64` |
+| Linux (x86_64) / WSL2 | `pty-mcp-linux-amd64` |
+| Linux (ARM64) | `pty-mcp-linux-arm64` |
+
+```bash
+chmod +x pty-mcp-*
+sudo mv pty-mcp-* /usr/local/bin/pty-mcp
+claude mcp add pty-mcp -- /usr/local/bin/pty-mcp
+```
+
+**Build from source** (requires Go 1.25+):
 
 ```bash
 go install github.com/raychao-oao/pty-mcp@latest
-go install github.com/raychao-oao/pty-mcp/cmd/ai-tmux@latest  # optional, for persistent sessions
+claude mcp add pty-mcp -- $(go env GOPATH)/bin/pty-mcp
 ```
 
-### Register with Claude Code
+</details>
+
+### WSL2 Notes
+
+pty-mcp works in WSL2 out of the box. Use the Linux binary:
 
 ```bash
-claude mcp add pty-mcp -- pty-mcp
+# Inside WSL2
+curl -fsSL https://raw.githubusercontent.com/raychao-oao/pty-mcp/main/install.sh | sh
+claude mcp add pty-mcp -- /usr/local/bin/pty-mcp
+```
+
+### Optional: Install ai-tmux on remote servers
+
+For persistent sessions that survive SSH disconnects, install `ai-tmux` on your remote server:
+
+```bash
+# Download for your server's architecture
+curl -fsSL https://raw.githubusercontent.com/raychao-oao/pty-mcp/main/install.sh | sh
+# Or just copy the binary:
+scp /usr/local/bin/ai-tmux your-server:/usr/local/bin/ai-tmux
 ```
 
 ### Usage Examples
