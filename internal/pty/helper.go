@@ -42,10 +42,12 @@ func HasPrompt(output string) bool {
 
 // WaitForSettle waits for output to stabilize and returns (output, isComplete).
 // isComplete=true means output settled or a prompt was detected; false means timeout.
+// Empty output is never considered "settled" — we keep waiting for data until timeout.
 func WaitForSettle(getOutput func() string, settle, timeout time.Duration) (string, bool) {
 	deadline := time.Now().Add(timeout)
 	last := getOutput()
 	lastChange := time.Now()
+	hasOutput := last != ""
 
 	for time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
@@ -54,14 +56,16 @@ func WaitForSettle(getOutput func() string, settle, timeout time.Duration) (stri
 		if current != last {
 			last = current
 			lastChange = time.Now()
+			hasOutput = hasOutput || current != ""
 			continue
 		}
 
-		if time.Since(lastChange) >= settle {
+		// Only settle when we've seen some output — empty doesn't count
+		if hasOutput && time.Since(lastChange) >= settle {
 			return current, true
 		}
 
-		if HasPrompt(StripANSI(current)) {
+		if hasOutput && HasPrompt(StripANSI(current)) {
 			return current, true
 		}
 	}
