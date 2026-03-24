@@ -2,7 +2,7 @@
 package session
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +17,7 @@ import (
 	ssh_config "github.com/kevinburke/ssh_config"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"github.com/raychao-oao/pty-mcp/internal/buffer"
 	"github.com/raychao-oao/pty-mcp/internal/pty"
 )
 
@@ -34,57 +35,9 @@ type SSHSession struct {
 	client    *gossh.Client
 	session   *gossh.Session
 	stdin     io.WriteCloser
-	buf       lockedBuffer
+	buf       *buffer.RingBuffer
 	alive     atomic.Bool
 	closeOnce sync.Once
-}
-
-// lockedBuffer is a thread-safe bytes.Buffer for concurrent SSH stdout/stderr writes
-type lockedBuffer struct {
-	mu       sync.Mutex
-	buf      bytes.Buffer
-	snapshot int
-}
-
-func (lb *lockedBuffer) Write(p []byte) (int, error) {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	return lb.buf.Write(p)
-}
-
-func (lb *lockedBuffer) String() string {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	return lb.buf.String()
-}
-
-func (lb *lockedBuffer) Since() string {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	b := lb.buf.Bytes()
-	if lb.snapshot >= len(b) {
-		return ""
-	}
-	return string(b[lb.snapshot:])
-}
-
-func (lb *lockedBuffer) Mark() {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	lb.snapshot = lb.buf.Len()
-}
-
-// SinceAndMark atomically reads since snapshot and advances the snapshot
-func (lb *lockedBuffer) SinceAndMark() string {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	b := lb.buf.Bytes()
-	if lb.snapshot >= len(b) {
-		return ""
-	}
-	result := string(b[lb.snapshot:])
-	lb.snapshot = len(b)
-	return result
 }
 
 // resolveSSHConfig fills missing fields from ~/.ssh/config
@@ -165,11 +118,12 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 		client:  client,
 		session: sess,
 		stdin:   stdinPipe,
+		buf:     buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
 	}
 	s.alive.Store(true)
 
-	sess.Stdout = &s.buf
-	sess.Stderr = &s.buf
+	sess.Stdout = s.buf
+	sess.Stderr = s.buf
 
 	if err := sess.RequestPty("xterm-256color", 40, 120, gossh.TerminalModes{
 		gossh.ECHO:          1,
@@ -479,3 +433,6 @@ func (s *SSHSession) Close() error {
 	})
 	return closeErr
 }
+
+func (s *SSHSession) Buffer() *buffer.RingBuffer { return s.buf }
+func (s *SSHSession) PollRemote(_ context.Context) {} // no-op for SSH

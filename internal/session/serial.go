@@ -2,6 +2,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -9,13 +10,14 @@ import (
 	"time"
 
 	"go.bug.st/serial"
+	"github.com/raychao-oao/pty-mcp/internal/buffer"
 	"github.com/raychao-oao/pty-mcp/internal/pty"
 )
 
 type SerialSession struct {
 	id        string
 	port      serial.Port
-	buf       lockedBuffer
+	buf       *buffer.RingBuffer
 	alive     atomic.Bool
 	done      chan struct{}
 	closeOnce sync.Once
@@ -40,6 +42,7 @@ func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
 	s := &SerialSession{
 		id:   NewID(),
 		port: port,
+		buf:  buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
 		done: make(chan struct{}),
 	}
 	s.alive.Store(true)
@@ -118,3 +121,6 @@ func (s *SerialSession) Close() error {
 	})
 	return closeErr
 }
+
+func (s *SerialSession) Buffer() *buffer.RingBuffer { return s.buf }
+func (s *SerialSession) PollRemote(_ context.Context) {} // no-op for serial

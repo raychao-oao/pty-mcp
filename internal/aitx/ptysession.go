@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/raychao-oao/pty-mcp/internal/buffer"
 	ptyhelper "github.com/raychao-oao/pty-mcp/internal/pty"
 )
 
@@ -21,46 +22,11 @@ type PTYSession struct {
 	command   string
 	cmd       *exec.Cmd
 	ptyFile   *os.File
-	buf       safeBuffer
+	buf       *buffer.RingBuffer
 	alive     atomic.Bool
 	closeOnce sync.Once
 	createdAt time.Time
 	lastUsed  atomic.Value // time.Time
-}
-
-// safeBuffer is a thread-safe buffer (same concept as lockedBuffer in ssh.go)
-type safeBuffer struct {
-	mu       sync.Mutex
-	data     []byte
-	snapshot int
-}
-
-func (sb *safeBuffer) Write(p []byte) (int, error) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	sb.data = append(sb.data, p...)
-	return len(p), nil
-}
-
-func (sb *safeBuffer) String() string {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	return string(sb.data)
-}
-
-func (sb *safeBuffer) Since() string {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	if sb.snapshot >= len(sb.data) {
-		return ""
-	}
-	return string(sb.data[sb.snapshot:])
-}
-
-func (sb *safeBuffer) Mark() {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	sb.snapshot = len(sb.data)
 }
 
 func NewPTYSession(id, name, command string) (*PTYSession, error) {
@@ -88,6 +54,7 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 		command:   command,
 		cmd:       cmd,
 		ptyFile:   ptmx,
+		buf:       buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
 		createdAt: time.Now(),
 	}
 	s.alive.Store(true)
@@ -129,8 +96,9 @@ func (s *PTYSession) ID() string      { return s.id }
 func (s *PTYSession) Name() string    { return s.name }
 func (s *PTYSession) Command() string { return s.command }
 func (s *PTYSession) IsAlive() bool   { return s.alive.Load() }
-func (s *PTYSession) CreatedAt() time.Time { return s.createdAt }
-func (s *PTYSession) LastUsed() time.Time  { return s.lastUsed.Load().(time.Time) }
+func (s *PTYSession) CreatedAt() time.Time      { return s.createdAt }
+func (s *PTYSession) LastUsed() time.Time        { return s.lastUsed.Load().(time.Time) }
+func (s *PTYSession) Buffer() *buffer.RingBuffer { return s.buf }
 
 func (s *PTYSession) Write(input string) error {
 	if !s.alive.Load() {
