@@ -408,6 +408,8 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 			ContextLines: contextLines,
 			TailLines:    tailLines,
 		})
+		// Advance mark to current position so next read_output starts fresh
+		s.Buffer().Mark()
 		return result, nil
 	}
 
