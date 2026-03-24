@@ -1,8 +1,15 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/raychao-oao/pty-mcp/internal/buffer"
+	"github.com/raychao-oao/pty-mcp/internal/pty"
 	"github.com/raychao-oao/pty-mcp/internal/session"
 )
 
@@ -167,8 +174,209 @@ type SessionIDParams struct {
 	SessionID string `json:"session_id"`
 }
 
+type ReadOutputParams struct {
+	SessionID    string  `json:"session_id"`
+	Timeout      float64 `json:"timeout"`
+	WaitFor      string  `json:"wait_for"`
+	ContextLines int     `json:"context_lines"`
+	TailLines    int     `json:"tail_lines"`
+}
+
+type WaitForResult struct {
+	Matched     bool   `json:"matched"`
+	MatchLine   string `json:"match_line,omitempty"`
+	Context     string `json:"context,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Tail        string `json:"tail,omitempty"`
+	Warning     string `json:"warning,omitempty"`
+	IsTruncated bool   `json:"is_truncated,omitempty"`
+	IsAlive     bool   `json:"is_alive"`
+}
+
+type WaitForParams struct {
+	WaitFor      string
+	Timeout      time.Duration
+	ContextLines int
+	TailLines    int
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForParams) WaitForResult {
+	// 1. Compile regex, fallback to plain text on error
+	re, err := regexp.Compile(params.WaitFor)
+	usePlainMatch := (err != nil)
+	warning := ""
+	if usePlainMatch {
+		warning = "invalid regex, falling back to plain text match"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), params.Timeout)
+	defer cancel()
+
+	// Use snapshot=0 to read ALL existing buffer content first, then advance
+	// to current position so the main loop only picks up new writes.
+	snapshot := int64(0)
+	truncated := false
+	var remainder string
+	maxCollected := params.ContextLines + params.TailLines + 100
+	if maxCollected < 200 {
+		maxCollected = 200
+	}
+	collected := make([]string, 0, maxCollected)
+
+	// Check existing buffer content first
+	existing := rb.ReadSince(snapshot)
+	// Advance snapshot to current position so we only wait for new data
+	snapshot = rb.Snapshot()
+	if existing != "" {
+		if rb.IsTruncated(snapshot) {
+			truncated = true
+		}
+		lines := strings.Split(existing, "\n")
+		if len(lines) > 0 && !strings.HasSuffix(existing, "\n") {
+			remainder = lines[len(lines)-1]
+			lines = lines[:len(lines)-1]
+		}
+		for _, line := range lines {
+			clean := pty.StripANSI(line)
+			collected = append(collected, clean)
+			if len(collected) > maxCollected {
+				collected = collected[len(collected)-maxCollected:]
+			}
+			matched := false
+			if usePlainMatch {
+				matched = strings.Contains(clean, params.WaitFor)
+			} else {
+				matched = re.MatchString(clean)
+			}
+			if matched {
+				return buildMatchResult(clean, collected, params.ContextLines, warning, truncated, isAlive())
+			}
+		}
+	}
+
+	// Main loop: wait for new data
+	for {
+		if !rb.Wait(ctx) {
+			return buildTimeoutResult(collected, params, warning, truncated, isAlive())
+		}
+
+		chunk := rb.ReadSince(snapshot)
+		snapshot = rb.Snapshot()
+		if rb.IsTruncated(snapshot) {
+			truncated = true
+		}
+
+		if chunk == "" {
+			continue
+		}
+
+		chunk = remainder + chunk
+		remainder = ""
+
+		lines := strings.Split(chunk, "\n")
+		if len(lines) > 0 && !strings.HasSuffix(chunk, "\n") {
+			remainder = lines[len(lines)-1]
+			lines = lines[:len(lines)-1]
+		}
+
+		for _, line := range lines {
+			clean := pty.StripANSI(line)
+			collected = append(collected, clean)
+			if len(collected) > maxCollected {
+				collected = collected[len(collected)-maxCollected:]
+			}
+			matched := false
+			if usePlainMatch {
+				matched = strings.Contains(clean, params.WaitFor)
+			} else {
+				matched = re.MatchString(clean)
+			}
+			if matched {
+				return buildMatchResult(clean, collected, params.ContextLines, warning, truncated, isAlive())
+			}
+		}
+
+		if !isAlive() {
+			return WaitForResult{
+				Matched:     false,
+				Error:       "session terminated",
+				Tail:        tailFromCollected(collected, params.TailLines),
+				Warning:     warning,
+				IsTruncated: truncated,
+				IsAlive:     false,
+			}
+		}
+	}
+}
+
+func buildMatchResult(matchLine string, collected []string, contextLines int, warning string, truncated bool, alive bool) WaitForResult {
+	result := WaitForResult{
+		Matched:   true,
+		MatchLine: matchLine,
+		IsAlive:   alive,
+	}
+	if warning != "" {
+		result.Warning = warning
+	}
+	if truncated {
+		result.IsTruncated = true
+	}
+	if contextLines > 0 {
+		idx := len(collected) - 1
+		start := idx - contextLines
+		if start < 0 {
+			start = 0
+		}
+		end := idx + contextLines + 1
+		if end > len(collected) {
+			end = len(collected)
+		}
+		result.Context = strings.Join(collected[start:end], "\n")
+	}
+	return result
+}
+
+func buildTimeoutResult(collected []string, params WaitForParams, warning string, truncated bool, alive bool) WaitForResult {
+	result := WaitForResult{
+		Matched: false,
+		Error:   fmt.Sprintf("timeout after %ds", int(params.Timeout.Seconds())),
+		IsAlive: alive,
+	}
+	if warning != "" {
+		result.Warning = warning
+	}
+	if truncated {
+		result.IsTruncated = true
+	}
+	if params.TailLines > 0 {
+		result.Tail = tailFromCollected(collected, params.TailLines)
+	}
+	return result
+}
+
+func tailFromCollected(collected []string, n int) string {
+	if n <= 0 || len(collected) == 0 {
+		return ""
+	}
+	start := len(collected) - n
+	if start < 0 {
+		start = 0
+	}
+	return strings.Join(collected[start:], "\n")
+}
+
 func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
-	var p SessionIDParams
+	var p ReadOutputParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
@@ -176,7 +384,43 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	output, isComplete := s.ReadScreen(5000)
+
+	// Mode 3: wait_for pattern matching
+	if p.WaitFor != "" {
+		timeoutSec := p.Timeout
+		if timeoutSec <= 0 {
+			timeoutSec = 5
+		}
+		if timeoutSec > 600 {
+			timeoutSec = 600
+		}
+		contextLines := clampInt(p.ContextLines, 0, 50)
+		tailLines := clampInt(p.TailLines, 0, 100)
+
+		// Start remote polling if needed
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec*float64(time.Second)))
+		defer cancel()
+		go s.PollRemote(ctx)
+
+		result := waitForPattern(s.Buffer(), s.IsAlive, WaitForParams{
+			WaitFor:      p.WaitFor,
+			Timeout:      time.Duration(timeoutSec * float64(time.Second)),
+			ContextLines: contextLines,
+			TailLines:    tailLines,
+		})
+		return result, nil
+	}
+
+	// Mode 1 & 2: existing behavior with optional custom timeout
+	timeoutMs := 5000
+	if p.Timeout > 0 {
+		ms := int(p.Timeout * 1000)
+		if ms > 600000 {
+			ms = 600000
+		}
+		timeoutMs = ms
+	}
+	output, isComplete := s.ReadScreen(timeoutMs)
 	return map[string]any{"output": output, "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
