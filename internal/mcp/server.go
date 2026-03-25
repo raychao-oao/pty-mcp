@@ -83,7 +83,7 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id"},
 	}},
-	{"name": "send_secret", "description": "Prompt the human user to type a secret (password/passphrase) directly into the terminal. The value is sent to the PTY session without ever appearing in AI context or logs.", "inputSchema": map[string]any{
+	{"name": "send_secret", "description": "Prompt the human user to type a secret (password/passphrase) directly into a GUI dialog. The value is sent to the PTY session without ever appearing in AI context or logs. IMPORTANT: only call this when the session is actively waiting for a password input (echo is off) — e.g. an SSH/sudo/getpass prompt. Do NOT call this on an idle shell prompt.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
