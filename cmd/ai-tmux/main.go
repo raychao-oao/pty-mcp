@@ -10,8 +10,18 @@ import (
 	"github.com/raychao-oao/pty-mcp/internal/aitx"
 )
 
+var version = "dev"
+
 func main() {
 	log.SetOutput(os.Stderr)
+
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "--version", "-v":
+			fmt.Printf("ai-tmux %s\n", version)
+			return
+		}
+	}
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: ai-tmux <server|client|list> [options]\n")
