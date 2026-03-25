@@ -4,17 +4,55 @@
 
 An MCP (Model Context Protocol) server that gives AI agents interactive terminal sessions — local shells, SSH, serial ports, and persistent remote sessions that survive disconnects.
 
+Built for **sysadmins and network engineers** who want AI to help with real server and device management, not just code generation.
+
 ![AI agent interacting with Telehack BBS via pty-mcp](docs/screenshots/telehack-cowsay.png)
 
 ## Why
 
-AI coding agents run commands in non-interactive shells. They can't:
-- Interact with running programs (send stdin, ctrl+c)
-- Use REPLs (python3, node, psql)
-- Keep session state (cd, export, running processes)
-- Manage long-running tasks across reconnects
+AI agents run commands in non-interactive shells. They can't:
+- SSH into a server and interact with running processes
+- Connect to routers or switches via serial console
+- Monitor logs and react when a specific event occurs
+- Keep session state across multiple commands
+- Wait for a server to reboot and detect when it's back up
 
 pty-mcp solves all of these by providing real PTY sessions over MCP.
+
+## Use Cases
+
+**Server administration**
+```
+# Reboot a server and wait until it's back online
+create_local_session("ping myserver")
+read_output(wait_for: "bytes from", timeout: 300)
+→ blocks until server responds after reboot (~80s, one tool call)
+```
+
+**Network device management**
+```
+# Connect to a router via serial console
+create_serial_session(port: "/dev/ttyUSB0", baud: 9600)
+send_input("show interfaces status")
+read_output(wait_for: "\\$")
+```
+
+**Log monitoring and alerting**
+```
+# Watch logs and act when something happens
+create_ssh_session(host: "prod", user: "admin")
+send_input("tail -f /var/log/app.log")
+read_output(wait_for: "ERROR|CRITICAL", timeout: 3600)
+→ returns the error line + context when it appears
+```
+
+**Long-running tasks that survive disconnects**
+```
+create_ssh_session(host: "server", user: "admin", persistent: true)
+send_input("apt upgrade -y")
+detach_session()          → close Claude Code, task continues
+# Reconnect later to check result
+```
 
 ## Features
 
