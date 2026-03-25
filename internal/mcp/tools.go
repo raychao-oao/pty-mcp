@@ -543,10 +543,11 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 // back to /dev/tty for headless environments.
 //
 // Priority:
-//  1. macOS  → osascript (native password dialog)
-//  2. Linux + $DISPLAY + zenity available → zenity --password
-//  3. Linux + $DISPLAY + kdialog available → kdialog --password
-//  4. Fallback → /dev/tty (works in plain terminals, not inside TUI)
+//  1. macOS       → osascript (native password dialog)
+//  2. WSL2        → powershell.exe Get-Credential (Windows GUI dialog)
+//  3. Linux + $DISPLAY + zenity → zenity --password
+//  4. Linux + $DISPLAY + kdialog → kdialog --password
+//  5. Fallback    → /dev/tty (works in plain terminals, not inside TUI)
 func readSecretFromUser(prompt string) ([]byte, error) {
 	switch runtime.GOOS {
 	case "darwin":
@@ -554,6 +555,11 @@ func readSecretFromUser(prompt string) ([]byte, error) {
 			return secret, nil
 		}
 	case "linux":
+		if isWSL2() {
+			if secret, err := readSecretPowerShell(prompt); err == nil {
+				return secret, nil
+			}
+		}
 		if os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" {
 			if _, err := exec.LookPath("zenity"); err == nil {
 				if secret, err := readSecretZenity(prompt); err == nil {
@@ -568,6 +574,30 @@ func readSecretFromUser(prompt string) ([]byte, error) {
 		}
 	}
 	return readSecretTTY(prompt)
+}
+
+func isWSL2() bool {
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(data))
+	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
+}
+
+func readSecretPowerShell(prompt string) ([]byte, error) {
+	// Get-Credential pops a standard Windows password dialog (input is masked).
+	// Username field is pre-filled with "secret" and not editable.
+	// stdout returns the plaintext password.
+	cmdStr := fmt.Sprintf(
+		`$cred = Get-Credential -UserName "secret" -Message %q; $cred.GetNetworkCredential().Password`,
+		prompt,
+	)
+	out, err := exec.Command("powershell.exe", "-NoProfile", "-Command", cmdStr).Output()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimRight(string(out), "\r\n")), nil
 }
 
 func readSecretOsascript(prompt string) ([]byte, error) {
