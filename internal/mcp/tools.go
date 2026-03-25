@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -523,17 +525,9 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 		prompt = "Enter secret: "
 	}
 
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	secret, err := readSecretFromUser(prompt)
 	if err != nil {
-		return nil, fmt.Errorf("cannot open /dev/tty: %w", err)
-	}
-	defer tty.Close()
-
-	fmt.Fprint(tty, "\n[pty-mcp] "+prompt)
-	secret, err := term.ReadPassword(int(tty.Fd()))
-	fmt.Fprintln(tty)
-	if err != nil {
-		return nil, fmt.Errorf("read secret: %w", err)
+		return nil, err
 	}
 
 	if err := s.WriteRaw(string(secret) + "\r"); err != nil {
@@ -541,4 +535,87 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 	}
 
 	return map[string]any{"success": true, "length": len(secret)}, nil
+}
+
+// readSecretFromUser prompts the human operator for a secret without
+// exposing it to the AI context. It tries GUI dialogs first (so the
+// prompt is visible even inside a TUI like Claude Code), then falls
+// back to /dev/tty for headless environments.
+//
+// Priority:
+//  1. macOS  → osascript (native password dialog)
+//  2. Linux + $DISPLAY + zenity available → zenity --password
+//  3. Linux + $DISPLAY + kdialog available → kdialog --password
+//  4. Fallback → /dev/tty (works in plain terminals, not inside TUI)
+func readSecretFromUser(prompt string) ([]byte, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		if secret, err := readSecretOsascript(prompt); err == nil {
+			return secret, nil
+		}
+	case "linux":
+		if os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" {
+			if _, err := exec.LookPath("zenity"); err == nil {
+				if secret, err := readSecretZenity(prompt); err == nil {
+					return secret, nil
+				}
+			}
+			if _, err := exec.LookPath("kdialog"); err == nil {
+				if secret, err := readSecretKdialog(prompt); err == nil {
+					return secret, nil
+				}
+			}
+		}
+	}
+	return readSecretTTY(prompt)
+}
+
+func readSecretOsascript(prompt string) ([]byte, error) {
+	script := fmt.Sprintf(
+		`tell application "System Events" to display dialog %q with hidden answer default answer "" buttons {"OK"} default button "OK"`,
+		prompt,
+	)
+	out, err := exec.Command("osascript", "-e", script).Output()
+	if err != nil {
+		return nil, err
+	}
+	// Output: "button returned:OK, text returned:<secret>\n"
+	result := strings.TrimSpace(string(out))
+	const marker = "text returned:"
+	idx := strings.Index(result, marker)
+	if idx < 0 {
+		return nil, fmt.Errorf("osascript: unexpected output: %s", result)
+	}
+	return []byte(result[idx+len(marker):]), nil
+}
+
+func readSecretZenity(prompt string) ([]byte, error) {
+	out, err := exec.Command("zenity", "--password", "--title=pty-mcp", "--text="+prompt).Output()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimRight(string(out), "\n")), nil
+}
+
+func readSecretKdialog(prompt string) ([]byte, error) {
+	out, err := exec.Command("kdialog", "--password", prompt, "--title", "pty-mcp").Output()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimRight(string(out), "\n")), nil
+}
+
+func readSecretTTY(prompt string) ([]byte, error) {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open /dev/tty: %w", err)
+	}
+	defer tty.Close()
+	fmt.Fprint(tty, "\n[pty-mcp] "+prompt)
+	secret, err := term.ReadPassword(int(tty.Fd()))
+	fmt.Fprintln(tty)
+	if err != nil {
+		return nil, fmt.Errorf("read secret: %w", err)
+	}
+	return secret, nil
 }
