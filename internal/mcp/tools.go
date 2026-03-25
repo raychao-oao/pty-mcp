@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/raychao-oao/pty-mcp/internal/buffer"
 	"github.com/raychao-oao/pty-mcp/internal/pty"
@@ -498,4 +501,44 @@ func (h *Handler) DetachSession(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return map[string]bool{"success": true}, nil
+}
+
+type SendSecretParams struct {
+	SessionID string `json:"session_id"`
+	Prompt    string `json:"prompt"`
+}
+
+func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
+	var p SendSecretParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	s, err := h.mgr.Get(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	prompt := p.Prompt
+	if prompt == "" {
+		prompt = "Enter secret: "
+	}
+
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open /dev/tty: %w", err)
+	}
+	defer tty.Close()
+
+	fmt.Fprint(tty, "\n[pty-mcp] "+prompt)
+	secret, err := term.ReadPassword(int(tty.Fd()))
+	fmt.Fprintln(tty)
+	if err != nil {
+		return nil, fmt.Errorf("read secret: %w", err)
+	}
+
+	if err := s.WriteRaw(string(secret) + "\r"); err != nil {
+		return nil, fmt.Errorf("write to session: %w", err)
+	}
+
+	return map[string]any{"success": true, "length": len(secret)}, nil
 }

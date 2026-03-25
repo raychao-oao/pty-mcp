@@ -83,6 +83,14 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id"},
 	}},
+	{"name": "send_secret", "description": "Prompt the human user to type a secret (password/passphrase) directly into the terminal. The value is sent to the PTY session without ever appearing in AI context or logs.", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"prompt":     map[string]any{"type": "string", "description": "Prompt shown to the user (default: \"Enter secret: \")"},
+		},
+		"required": []string{"session_id"},
+	}},
 	{"name": "send_control", "description": "Send a control key (ctrl+c, ctrl+d, enter, tab, up, down, etc.)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}, "key": map[string]any{"type": "string"}},
@@ -183,6 +191,8 @@ func handleToolCall(h *Handler, req *request) response {
 		result, err = h.SendInput(p.Arguments)
 	case "read_output":
 		result, err = h.ReadOutput(p.Arguments)
+	case "send_secret":
+		result, err = h.SendSecret(p.Arguments)
 	case "send_control":
 		result, err = h.SendControl(p.Arguments)
 	case "list_sessions":
