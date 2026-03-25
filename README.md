@@ -173,10 +173,13 @@ send_input(session_id, "echo $?")         → check build result
 | `send_input` | Send a command and wait for output to settle |
 | `read_output` | Read output, optionally wait for a pattern (`wait_for`, `timeout`, `context_lines`, `tail_lines`) |
 | `send_control` | Send control keys (ctrl+c, ctrl+d, arrows, tab, etc.) |
+| `send_secret` | Prompt the human operator for a secret via GUI dialog; sends it to the PTY session without exposing it to AI context or logs ¹ |
 | `list_sessions` | List all active sessions |
 | `close_session` | Close a session (terminates remote PTY) |
 | `detach_session` | Disconnect but keep remote PTY running |
 | `list_remote_sessions` | List persistent sessions on a remote host |
+
+> ¹ **`send_secret` platform support**: macOS uses a native password dialog (osascript). Linux with a display server uses `zenity` or `kdialog`. Headless Linux falls back to `/dev/tty`. **Linux/WSL2 GUI path is currently being verified** — feedback welcome.
 
 ## ai-tmux: Persistent Terminal Daemon
 
