@@ -19,6 +19,8 @@ AI agents run commands in non-interactive shells. They can't:
 
 pty-mcp solves all of these by providing real PTY sessions over MCP.
 
+Without pty-mcp, AI agents resort to `sleep 30 && check_status` loops — burning CPU cycles and API calls waiting for things to happen. With `wait_for`, the agent blocks server-side until the event occurs. Less polling, less energy, better for polar bears. 🐻‍❄️
+
 ## Use Cases
 
 **Server administration**
