@@ -1,4 +1,5 @@
 pty-mcp
+!plugin/
 /ai-tmux
 pty-mcp-linux
 ai-tmux-linux
