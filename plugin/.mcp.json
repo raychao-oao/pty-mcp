@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "pty-mcp": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/pty-mcp",
+      "args": []
+    }
+  }
+}
