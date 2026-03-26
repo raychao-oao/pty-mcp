@@ -1,0 +1,20 @@
+{
+  "name": "pty-mcp",
+  "owner": {
+    "name": "raychao-oao",
+    "email": "ray.chao@oao.tw"
+  },
+  "plugins": [
+    {
+      "name": "pty-mcp",
+      "description": "Interactive PTY sessions for AI agents: local shell, SSH, serial port, and persistent remote sessions.",
+      "version": "0.3.0",
+      "author": {
+        "name": "raychao-oao",
+        "url": "https://github.com/raychao-oao/pty-mcp"
+      },
+      "source": "./",
+      "category": "tools"
+    }
+  ]
+}
