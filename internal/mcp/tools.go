@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -67,7 +69,9 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	target := fmt.Sprintf("%s@%s", p.User, p.Host)
-	h.mgr.Add(s, target)
+	if err := h.mgr.Add(s, target); err != nil {
+		return nil, err
+	}
 	return map[string]string{"session_id": s.ID(), "type": sessionType, "target": target}, nil
 }
 
@@ -116,7 +120,9 @@ func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	h.mgr.Add(s, p.Command)
+	if err := h.mgr.Add(s, p.Command); err != nil {
+		return nil, err
+	}
 	return map[string]string{"session_id": s.ID(), "type": "local", "command": p.Command}, nil
 }
 
@@ -135,7 +141,9 @@ func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	target := fmt.Sprintf("%s@%d", p.Device, p.BaudRate)
-	h.mgr.Add(s, target)
+	if err := h.mgr.Add(s, target); err != nil {
+		return nil, err
+	}
 	return map[string]string{"session_id": s.ID(), "type": "serial", "target": target}, nil
 }
 
@@ -534,7 +542,7 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("write to session: %w", err)
 	}
 
-	return map[string]any{"success": true, "length": len(secret)}, nil
+	return map[string]any{"success": true}, nil
 }
 
 // readSecretFromUser prompts the human operator for a secret without
@@ -589,9 +597,11 @@ func readSecretPowerShell(prompt string) ([]byte, error) {
 	// Get-Credential pops a standard Windows password dialog (input is masked).
 	// Username field is pre-filled with "secret" and not editable.
 	// stdout returns the plaintext password.
+	// Use PowerShell single-quoted string: only '' is special, preventing injection.
+	escaped := strings.ReplaceAll(prompt, "'", "''")
 	cmdStr := fmt.Sprintf(
-		`$cred = Get-Credential -UserName "secret" -Message %q; $cred.GetNetworkCredential().Password`,
-		prompt,
+		`$cred = Get-Credential -UserName "secret" -Message '%s'; $cred.GetNetworkCredential().Password`,
+		escaped,
 	)
 	out, err := exec.Command("powershell.exe", "-NoProfile", "-Command", cmdStr).Output()
 	if err != nil {
@@ -601,26 +611,26 @@ func readSecretPowerShell(prompt string) ([]byte, error) {
 }
 
 func readSecretOsascript(prompt string) ([]byte, error) {
-	script := fmt.Sprintf(
-		`tell application "System Events" to display dialog %q with hidden answer default answer "" buttons {"OK"} default button "OK"`,
-		prompt,
-	)
-	out, err := exec.Command("osascript", "-e", script).Output()
+	// Pass prompt via environment variable to avoid AppleScript string injection.
+	script := `tell application "System Events" to display dialog (system attribute "PTY_MCP_PROMPT") with hidden answer default answer "" buttons {"OK"} default button "OK"`
+	cmd := exec.Command("osascript", "-e", script)
+	cmd.Env = append(os.Environ(), "PTY_MCP_PROMPT="+prompt)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
 	// Output: "button returned:OK, text returned:<secret>\n"
 	result := strings.TrimSpace(string(out))
-	const marker = "text returned:"
-	idx := strings.Index(result, marker)
-	if idx < 0 {
+	const prefix = "button returned:OK, text returned:"
+	if !strings.HasPrefix(result, prefix) {
 		return nil, fmt.Errorf("osascript: unexpected output: %s", result)
 	}
-	return []byte(result[idx+len(marker):]), nil
+	return []byte(result[len(prefix):]), nil
 }
 
 func readSecretZenity(prompt string) ([]byte, error) {
-	out, err := exec.Command("zenity", "--password", "--title=pty-mcp", "--text="+prompt).Output()
+	// --no-markup disables Pango markup processing in the prompt text.
+	out, err := exec.Command("zenity", "--password", "--title=pty-mcp", "--no-markup", "--text="+prompt).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -641,6 +651,23 @@ func readSecretTTY(prompt string) ([]byte, error) {
 		return nil, fmt.Errorf("cannot open /dev/tty: %w", err)
 	}
 	defer tty.Close()
+
+	// Restore terminal echo if we are interrupted by a signal.
+	// Close sigCh after signal.Stop to unblock the goroutine on normal completion.
+	if oldState, err := term.GetState(int(tty.Fd())); err == nil {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			if _, ok := <-sigCh; ok {
+				term.Restore(int(tty.Fd()), oldState) //nolint:errcheck
+			}
+		}()
+		defer func() {
+			signal.Stop(sigCh)
+			close(sigCh)
+		}()
+	}
+
 	fmt.Fprint(tty, "\n[pty-mcp] "+prompt)
 	secret, err := term.ReadPassword(int(tty.Fd()))
 	fmt.Fprintln(tty)

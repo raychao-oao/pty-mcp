@@ -49,16 +49,16 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"host", "user"},
 	}},
-	{"name": "create_local_session", "description": "Open a local interactive terminal session (bash, python3, node, etc.)", "inputSchema": map[string]any{
+	{"name": "create_local_session", "description": "Open a local interactive terminal session (bash, python3, node, etc.). WARNING: Executes as the current user with full local system access — this is by design for legitimate sysadmin automation. Only use on trusted systems.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"command": map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
 		},
 	}},
-	{"name": "create_serial_session", "description": "Open a serial port session", "inputSchema": map[string]any{
+	{"name": "create_serial_session", "description": "Open a serial port session. Device path must start with /dev/tty or /dev/cu. (e.g. /dev/ttyUSB0, /dev/cu.usbserial-XXXX)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"device":    map[string]any{"type": "string", "description": "Serial device path, e.g. /dev/tty.usbserial-XXXX"},
+			"device":    map[string]any{"type": "string", "description": "Serial device path (must start with /dev/tty or /dev/cu.)"},
 			"baud_rate": map[string]any{"type": "integer", "description": "Baud rate (default: 9600)"},
 		},
 		"required": []string{"device"},

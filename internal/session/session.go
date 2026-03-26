@@ -2,11 +2,12 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/raychao-oao/pty-mcp/internal/buffer"
 )
 
@@ -32,6 +33,8 @@ type Info struct {
 	CreatedAt time.Time `json:"created_at"`
 	LastUsed  time.Time `json:"last_used"`
 }
+
+const maxSessions = 50
 
 // Manager manages the lifecycle of all sessions
 type Manager struct {
@@ -79,9 +82,13 @@ func (m *Manager) idleReaper() {
 	}
 }
 
-func (m *Manager) Add(s Session, target string) {
+func (m *Manager) Add(s Session, target string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(m.sessions) >= maxSessions {
+		s.Close()
+		return fmt.Errorf("session limit reached (%d max); close existing sessions first", maxSessions)
+	}
 	now := time.Now()
 	m.sessions[s.ID()] = s
 	m.infos[s.ID()] = Info{
@@ -92,6 +99,7 @@ func (m *Manager) Add(s Session, target string) {
 		CreatedAt: now,
 		LastUsed:  now,
 	}
+	return nil
 }
 
 func (m *Manager) Get(id string) (Session, error) {
@@ -155,5 +163,7 @@ func (m *Manager) Detach(id string) error {
 }
 
 func NewID() string {
-	return uuid.New().String()[:8]
+	var b [8]byte
+	rand.Read(b[:]) //nolint:errcheck
+	return hex.EncodeToString(b[:]) // 16 hex chars = 64 bits of entropy
 }

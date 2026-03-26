@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,7 +24,17 @@ type SerialSession struct {
 	closeOnce sync.Once
 }
 
+func isValidSerialDevice(device string) bool {
+	if strings.Contains(device, "..") {
+		return false
+	}
+	return strings.HasPrefix(device, "/dev/tty") || strings.HasPrefix(device, "/dev/cu.")
+}
+
 func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
+	if !isValidSerialDevice(device) {
+		return nil, fmt.Errorf("invalid serial device %q: must start with /dev/tty or /dev/cu. (e.g. /dev/ttyUSB0, /dev/cu.usbserial-XXXX)", device)
+	}
 	if baudRate == 0 {
 		baudRate = 9600
 	}

@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const maxAiTmuxSessions = 100
+
 type Server struct {
 	mu          sync.RWMutex
 	sessions    map[string]*PTYSession
@@ -25,15 +27,15 @@ type Server struct {
 func RunServer(socketPath string, idleSeconds int) error {
 	os.Remove(socketPath)
 
+	// Set restrictive umask before Listen to prevent TOCTOU race on socket permissions.
+	oldUmask := syscall.Umask(0077)
 	ln, err := net.Listen("unix", socketPath)
+	syscall.Umask(oldUmask)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", socketPath, err)
 	}
 	defer ln.Close()
 	defer os.Remove(socketPath)
-
-	// restrict socket permissions to owner only
-	os.Chmod(socketPath, 0700)
 
 	srv := &Server{
 		sessions:    make(map[string]*PTYSession),
@@ -107,15 +109,29 @@ func (srv *Server) createSession(req *Request) Response {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
 
-	var idBytes [4]byte
-	rand.Read(idBytes[:])
+	// Check limit before forking to avoid unnecessary PTY allocation.
+	srv.mu.Lock()
+	if len(srv.sessions) >= maxAiTmuxSessions {
+		srv.mu.Unlock()
+		return Response{ID: req.ID, Error: fmt.Sprintf("session limit reached (%d max)", maxAiTmuxSessions)}
+	}
+	srv.mu.Unlock()
+
+	var idBytes [8]byte
+	rand.Read(idBytes[:]) //nolint:errcheck
 	id := hex.EncodeToString(idBytes[:])
 	s, err := NewPTYSession(id, p.Name, p.Command)
 	if err != nil {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
 
+	// Re-check under lock after PTY creation (double-checked locking).
 	srv.mu.Lock()
+	if len(srv.sessions) >= maxAiTmuxSessions {
+		srv.mu.Unlock()
+		s.Close()
+		return Response{ID: req.ID, Error: fmt.Sprintf("session limit reached (%d max)", maxAiTmuxSessions)}
+	}
 	srv.sessions[id] = s
 	srv.mu.Unlock()
 

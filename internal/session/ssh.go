@@ -204,8 +204,7 @@ func buildHostKeyCallback(cfg SSHConfig) (gossh.HostKeyCallback, error) {
 	knownHostsFile := filepath.Join(home, ".ssh", "known_hosts")
 
 	if _, err := os.Stat(knownHostsFile); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "[pty-mcp] warning: %s not found, host key verification disabled\n", knownHostsFile)
-		return gossh.InsecureIgnoreHostKey(), nil
+		return nil, fmt.Errorf("host key verification failed: %s not found; run 'ssh-keyscan HOST >> ~/.ssh/known_hosts' to add the host, or set ignore_host_key: true to bypass (not recommended)", knownHostsFile)
 	}
 
 	cb, err := knownhosts.New(knownHostsFile)
