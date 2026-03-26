@@ -100,6 +100,19 @@ Persistent mode (ai-tmux):
 
 ## Quick Start
 
+### Claude Code Plugin (recommended)
+
+Installs the binary automatically and registers the MCP server:
+
+```bash
+claude plugin marketplace add raychao-oao/pty-mcp
+claude plugin install pty-mcp@pty-mcp
+```
+
+Restart Claude Code — done. No manual `claude mcp add` needed.
+
+### Manual install
+
 **One-line install + register** (macOS / Linux / WSL2):
 
 ```bash
@@ -107,7 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/raychao-oao/pty-mcp/main/install.sh
 claude mcp add pty-mcp -- /usr/local/bin/pty-mcp
 ```
 
-That's it. Restart Claude Code and the tools are available.
+Restart Claude Code and the tools are available.
 
 <details>
 <summary><b>Other install methods</b></summary>
