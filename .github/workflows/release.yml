@@ -5,39 +5,44 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-
 jobs:
-  release:
+  build:
+    name: Build and release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
 
-      - name: Build binaries
+      - name: Build all platforms
         run: |
-          mkdir -p dist
-          VERSION=${GITHUB_REF_NAME}
-          LDFLAGS="-s -w -X main.version=${VERSION}"
+          VERSION="${GITHUB_REF_NAME}"
+          LDFLAGS="-X main.version=${VERSION}"
 
-          # pty-mcp
-          GOOS=darwin GOARCH=amd64  go build -ldflags "$LDFLAGS" -o dist/pty-mcp-darwin-amd64 .
-          GOOS=darwin GOARCH=arm64  go build -ldflags "$LDFLAGS" -o dist/pty-mcp-darwin-arm64 .
-          GOOS=linux  GOARCH=amd64  go build -ldflags "$LDFLAGS" -o dist/pty-mcp-linux-amd64 .
-          GOOS=linux  GOARCH=arm64  go build -ldflags "$LDFLAGS" -o dist/pty-mcp-linux-arm64 .
+          GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o pty-mcp-darwin-arm64 .
+          GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o pty-mcp-darwin-amd64 .
+          GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o pty-mcp-linux-amd64  .
+          GOOS=linux   GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o pty-mcp-linux-arm64  .
 
-          # ai-tmux
-          GOOS=darwin GOARCH=amd64  go build -o dist/ai-tmux-darwin-amd64 ./cmd/ai-tmux/
-          GOOS=darwin GOARCH=arm64  go build -o dist/ai-tmux-darwin-arm64 ./cmd/ai-tmux/
-          GOOS=linux  GOARCH=amd64  go build -o dist/ai-tmux-linux-amd64 ./cmd/ai-tmux/
-          GOOS=linux  GOARCH=arm64  go build -o dist/ai-tmux-linux-arm64 ./cmd/ai-tmux/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o ai-tmux-darwin-arm64 ./cmd/ai-tmux/
+          GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ai-tmux-darwin-amd64 ./cmd/ai-tmux/
+          GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ai-tmux-linux-amd64  ./cmd/ai-tmux/
+          GOOS=linux   GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o ai-tmux-linux-arm64  ./cmd/ai-tmux/
 
-      - name: Create Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-          files: dist/*
+          files: |
+            pty-mcp-darwin-arm64
+            pty-mcp-darwin-amd64
+            pty-mcp-linux-amd64
+            pty-mcp-linux-arm64
+            ai-tmux-darwin-arm64
+            ai-tmux-darwin-amd64
+            ai-tmux-linux-amd64
+            ai-tmux-linux-arm64
