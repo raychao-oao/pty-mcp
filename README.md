@@ -191,6 +191,20 @@ read_output(session_id, wait_for: "ready|error", timeout: 60, context_lines: 3)
 → returns matched line + 3 lines of context
 ```
 
+**Send secret / password (v0.3.0):**
+```
+# AI detects a password prompt, calls send_secret instead of handling the password itself
+create_ssh_session(host: "router", user: "admin")
+read_output(session_id, wait_for: "Password:")   → session is waiting for input
+
+send_secret(session_id, prompt: "Router admin password:")
+→ native GUI dialog appears on the operator's screen (macOS: system dialog,
+   WSL2: Windows Get-Credential, Linux: zenity/kdialog)
+→ operator types password — it is sent directly to the PTY session
+→ AI only sees: {success: true, length: 12}
+→ password never appears in AI context or logs
+```
+
 **Persistent session (survives SSH disconnect):**
 ```
 create_ssh_session(host: "server", user: "admin", persistent: true)
@@ -219,7 +233,7 @@ send_input(session_id, "echo $?")         → check build result
 | `detach_session` | Disconnect but keep remote PTY running |
 | `list_remote_sessions` | List persistent sessions on a remote host |
 
-> ¹ **`send_secret` platform support**: macOS uses a native password dialog (osascript). Linux with a display server uses `zenity` or `kdialog`. Headless Linux falls back to `/dev/tty`. **Linux/WSL2 GUI path is currently being verified** — feedback welcome.
+> ¹ **`send_secret` platform support**: macOS uses a native password dialog (osascript). WSL2 uses `powershell.exe Get-Credential` (Windows GUI dialog). Linux with a display server uses `zenity` or `kdialog`. Headless Linux falls back to `/dev/tty`.
 
 ## ai-tmux: Persistent Terminal Daemon
 
