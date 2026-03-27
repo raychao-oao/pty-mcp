@@ -109,7 +109,16 @@ claude plugin marketplace add raychao-oao/pty-mcp
 claude plugin install pty-mcp@pty-mcp
 ```
 
-Restart Claude Code — done. No manual `claude mcp add` needed.
+Restart Claude Code — the binary downloads automatically on session start, then **restart once more** to activate it. No manual `claude mcp add` needed.
+
+**Updating:**
+
+```bash
+claude plugin marketplace update pty-mcp
+claude plugin update pty-mcp@pty-mcp
+```
+
+Restart Claude Code — the new binary downloads automatically on session start, then **restart once more** to apply the update.
 
 ### Manual install
 
