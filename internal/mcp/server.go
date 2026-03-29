@@ -3,10 +3,14 @@ package mcp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"strings"
+
+	"github.com/raychao-oao/pty-mcp/internal/session"
 )
 
 type request struct {
@@ -72,11 +76,12 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id", "input"},
 	}},
-	{"name": "read_output", "description": "Read current screen output. Optionally wait for a regex pattern to appear in the output.", "inputSchema": map[string]any{
+	{"name": "read_output", "description": "Read output from a session. Three modes: (1) default: wait for output to settle, (2) since_cursor: incremental read from a cursor position (returns only new output), (3) wait_for: block until a regex pattern matches.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"session_id":    map[string]any{"type": "string", "description": "Session ID to read from"},
 			"timeout":       map[string]any{"type": "number", "description": "Max wait time in seconds (default: 5, max: 600)"},
+			"since_cursor":  map[string]any{"type": "integer", "description": "Read only output written after this cursor position. Get cursor from previous read_output/send_input/get_session_state responses."},
 			"wait_for":      map[string]any{"type": "string", "description": "Regex pattern to wait for. Falls back to plain text match if regex is invalid."},
 			"context_lines": map[string]any{"type": "integer", "description": "Lines before/after matched line to include (default: 0, max: 50). Only with wait_for."},
 			"tail_lines":    map[string]any{"type": "integer", "description": "On timeout, include last N lines of output (default: 0, max: 100). Only with wait_for."},
@@ -95,6 +100,13 @@ var toolsList = []map[string]any{
 		"type": "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}, "key": map[string]any{"type": "string"}},
 		"required": []string{"session_id", "key"},
+	}},
+	{"name": "get_session_state", "description": "Get detailed state of a session: type, target, is_alive, buffer cursor position, timestamps. Use cursor with read_output(since_cursor=...) for incremental reads.", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"session_id"},
 	}},
 	{"name": "list_sessions", "description": "List all active sessions", "inputSchema": map[string]any{"type": "object"}},
 	{"name": "list_remote_sessions", "description": "List persistent sessions on a remote ai-tmux server (use session_id to reattach)", "inputSchema": map[string]any{
@@ -158,7 +170,7 @@ func handle(h *Handler, req *request) response {
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.1.0"},
+			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.4.0"},
 		}}
 	case "tools/list":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": toolsList}}
@@ -195,6 +207,8 @@ func handleToolCall(h *Handler, req *request) response {
 		result, err = h.SendSecret(p.Arguments)
 	case "send_control":
 		result, err = h.SendControl(p.Arguments)
+	case "get_session_state":
+		result, err = h.GetSessionState(p.Arguments)
 	case "list_sessions":
 		result, err = h.ListSessions(p.Arguments)
 	case "list_remote_sessions":
@@ -208,8 +222,10 @@ func handleToolCall(h *Handler, req *request) response {
 	}
 
 	if err != nil {
+		te := classifyError(err)
+		b, _ := json.Marshal(te)
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-			"content": []map[string]any{{"type": "text", "text": err.Error()}},
+			"content": []map[string]any{{"type": "text", "text": string(b)}},
 			"isError": true,
 		}}
 	}
@@ -221,4 +237,41 @@ func handleToolCall(h *Handler, req *request) response {
 
 func errResp(id any, code int, msg string) response {
 	return response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: msg}}
+}
+
+// classifyError maps known error types to structured ToolErrors.
+func classifyError(err error) *ToolError {
+	if te, ok := err.(*ToolError); ok {
+		return te
+	}
+	var notFound *session.SessionNotFoundError
+	if errors.As(err, &notFound) {
+		return newToolError(ErrSessionNotFound, err.Error(), false)
+	}
+	var limitErr *session.SessionLimitError
+	if errors.As(err, &limitErr) {
+		return newToolError(ErrSessionLimit, err.Error(), true)
+	}
+	// Heuristic classification for errors from SSH, serial, etc.
+	msg := err.Error()
+	switch {
+	case contains(msg, "ssh: unable to authenticate", "ssh: handshake failed", "no supported methods remain"):
+		return newToolError(ErrSSHAuthFailed, msg, false)
+	case contains(msg, "dial tcp", "connection refused", "no route to host", "i/o timeout"):
+		return newToolError(ErrSSHConnFailed, msg, true)
+	case contains(msg, "serial", "no such file or directory") && contains(msg, "/dev/"):
+		return newToolError(ErrSerialFailed, msg, false)
+	case contains(msg, "write to session", "broken pipe", "write:"):
+		return newToolError(ErrWriteFailed, msg, false)
+	}
+	return newToolError("INTERNAL_ERROR", msg, false)
+}
+
+func contains(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

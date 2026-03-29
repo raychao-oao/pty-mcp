@@ -82,12 +82,28 @@ func (m *Manager) idleReaper() {
 	}
 }
 
+// SessionNotFoundError is returned when a session ID does not exist.
+type SessionNotFoundError struct {
+	ID string
+}
+
+func (e *SessionNotFoundError) Error() string {
+	return fmt.Sprintf("session %q not found", e.ID)
+}
+
+// SessionLimitError is returned when the session limit is reached.
+type SessionLimitError struct{}
+
+func (e *SessionLimitError) Error() string {
+	return fmt.Sprintf("session limit reached (%d max); close existing sessions first", maxSessions)
+}
+
 func (m *Manager) Add(s Session, target string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.sessions) >= maxSessions {
 		s.Close()
-		return fmt.Errorf("session limit reached (%d max); close existing sessions first", maxSessions)
+		return &SessionLimitError{}
 	}
 	now := time.Now()
 	m.sessions[s.ID()] = s
@@ -107,13 +123,25 @@ func (m *Manager) Get(id string) (Session, error) {
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
-		return nil, fmt.Errorf("session %q not found", id)
+		return nil, &SessionNotFoundError{ID: id}
 	}
 	if info, ok := m.infos[id]; ok {
 		info.LastUsed = time.Now()
 		m.infos[id] = info
 	}
 	return s, nil
+}
+
+func (m *Manager) GetInfo(id string) Info {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if info, ok := m.infos[id]; ok {
+		if s, ok := m.sessions[id]; ok {
+			info.IsAlive = s.IsAlive()
+		}
+		return info
+	}
+	return Info{}
 }
 
 func (m *Manager) List() []Info {
@@ -134,7 +162,7 @@ func (m *Manager) Close(id string) error {
 	s, ok := m.sessions[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("session %q not found", id)
+		return &SessionNotFoundError{ID: id}
 	}
 	delete(m.sessions, id)
 	delete(m.infos, id)
@@ -149,7 +177,7 @@ func (m *Manager) Detach(id string) error {
 	s, ok := m.sessions[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("session %q not found", id)
+		return &SessionNotFoundError{ID: id}
 	}
 	delete(m.sessions, id)
 	delete(m.infos, id)

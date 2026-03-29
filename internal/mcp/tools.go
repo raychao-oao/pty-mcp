@@ -174,13 +174,13 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 			return nil, err
 		}
 		output, isComplete := rs.ReadScreen(p.TimeoutMs)
-		return map[string]any{"output": output, "is_alive": rs.IsAlive(), "is_complete": isComplete}, nil
+		return map[string]any{"output": output, "cursor": rs.Buffer().Snapshot(), "is_alive": rs.IsAlive(), "is_complete": isComplete}, nil
 	}
 	if err := s.Write(p.Input); err != nil {
 		return nil, err
 	}
 	output, isComplete := s.ReadScreen(p.TimeoutMs)
-	return map[string]any{"output": output, "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
+	return map[string]any{"output": output, "cursor": s.Buffer().Snapshot(), "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
 type SessionIDParams struct {
@@ -188,17 +188,19 @@ type SessionIDParams struct {
 }
 
 type ReadOutputParams struct {
-	SessionID    string  `json:"session_id"`
-	Timeout      float64 `json:"timeout"`
-	WaitFor      string  `json:"wait_for"`
-	ContextLines int     `json:"context_lines"`
-	TailLines    int     `json:"tail_lines"`
+	SessionID   string  `json:"session_id"`
+	Timeout     float64 `json:"timeout"`
+	WaitFor     string  `json:"wait_for"`
+	ContextLines int    `json:"context_lines"`
+	TailLines    int    `json:"tail_lines"`
+	SinceCursor *int64  `json:"since_cursor"`
 }
 
 type WaitForResult struct {
 	Matched     bool   `json:"matched"`
 	MatchLine   string `json:"match_line,omitempty"`
 	Context     string `json:"context,omitempty"`
+	Cursor      int64  `json:"cursor"`
 	Error       string `json:"error,omitempty"`
 	Tail        string `json:"tail,omitempty"`
 	Warning     string `json:"warning,omitempty"`
@@ -423,10 +425,25 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 		})
 		// Advance mark to current position so next read_output starts fresh
 		s.Buffer().Mark()
+		result.Cursor = s.Buffer().Snapshot()
 		return result, nil
 	}
 
-	// Mode 1 & 2: existing behavior with optional custom timeout
+	// Mode 2: incremental read from cursor position
+	if p.SinceCursor != nil {
+		rb := s.Buffer()
+		output := rb.ReadSince(*p.SinceCursor)
+		output = pty.StripANSI(output)
+		isTruncated := rb.IsTruncated(*p.SinceCursor)
+		return map[string]any{
+			"output":       output,
+			"cursor":       rb.Snapshot(),
+			"is_truncated": isTruncated,
+			"is_alive":     s.IsAlive(),
+		}, nil
+	}
+
+	// Mode 1: existing behavior with optional custom timeout
 	timeoutMs := 5000
 	if p.Timeout > 0 {
 		ms := int(p.Timeout * 1000)
@@ -436,7 +453,7 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 		timeoutMs = ms
 	}
 	output, isComplete := s.ReadScreen(timeoutMs)
-	return map[string]any{"output": output, "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
+	return map[string]any{"output": output, "cursor": s.Buffer().Snapshot(), "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
 type SendControlParams struct {
@@ -476,7 +493,7 @@ func (h *Handler) SendControl(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	output, isComplete := s.ReadScreen(5000)
-	return map[string]any{"output": output, "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
+	return map[string]any{"output": output, "cursor": s.Buffer().Snapshot(), "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
 func supportedKeys() []string {
@@ -485,6 +502,27 @@ func supportedKeys() []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func (h *Handler) GetSessionState(params json.RawMessage) (any, error) {
+	var p SessionIDParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	s, err := h.mgr.Get(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	info := h.mgr.GetInfo(p.SessionID)
+	return map[string]any{
+		"session_id": s.ID(),
+		"type":       s.Type(),
+		"target":     info.Target,
+		"is_alive":   s.IsAlive(),
+		"cursor":     s.Buffer().Snapshot(),
+		"created_at": info.CreatedAt,
+		"last_used":  info.LastUsed,
+	}, nil
 }
 
 func (h *Handler) ListSessions(_ json.RawMessage) (any, error) {
