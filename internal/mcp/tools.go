@@ -38,6 +38,7 @@ type CreateSSHParams struct {
 	Persistent bool   `json:"persistent"`  // use ai-tmux persistent session
 	Command    string `json:"command"`     // initial command in persistent mode
 	SessionID  string `json:"session_id"`  // reattach to an existing ai-tmux session
+	LogFile    string `json:"log_file"`    // append all output to this file path
 }
 
 func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
@@ -53,19 +54,30 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 		KeyPath:    p.KeyPath,
 		IgnoreHost: p.IgnoreHost,
 	}
+	logFile, err := openLogFile(p.LogFile)
+	if err != nil {
+		return nil, err
+	}
+
 	var s session.Session
-	var err error
 	var sessionType string
 
 	if p.Persistent || p.SessionID != "" {
+		if logFile != nil {
+			logFile.Close() // remote sessions don't support log_file yet
+			logFile = nil
+		}
 		s, err = session.NewRemoteSSHSession(cfg, p.Command, p.SessionID)
 		sessionType = "remote"
 	} else {
-		s, err = session.NewSSHSession(cfg)
+		s, err = session.NewSSHSessionWithLog(cfg, logFile)
 		sessionType = "ssh"
 	}
 
 	if err != nil {
+		if logFile != nil {
+			logFile.Close()
+		}
 		return nil, err
 	}
 	target := fmt.Sprintf("%s@%s", p.User, p.Host)
@@ -105,7 +117,8 @@ func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
 }
 
 type CreateLocalParams struct {
-	Command string `json:"command"` // default /bin/bash
+	Command string `json:"command"`  // default /bin/bash
+	LogFile string `json:"log_file"` // append all output to this file path
 }
 
 func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
@@ -116,8 +129,15 @@ func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
 	if p.Command == "" {
 		p.Command = "/bin/bash"
 	}
-	s, err := session.NewLocalSession(p.Command)
+	logFile, err := openLogFile(p.LogFile)
 	if err != nil {
+		return nil, err
+	}
+	s, err := session.NewLocalSessionWithLog(p.Command, logFile)
+	if err != nil {
+		if logFile != nil {
+			logFile.Close()
+		}
 		return nil, err
 	}
 	if err := h.mgr.Add(s, p.Command); err != nil {
@@ -129,6 +149,7 @@ func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
 type CreateSerialParams struct {
 	Device   string `json:"device"`
 	BaudRate int    `json:"baud_rate"`
+	LogFile  string `json:"log_file"` // append all output to this file path
 }
 
 func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
@@ -136,8 +157,15 @@ func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
-	s, err := session.NewSerialSession(p.Device, p.BaudRate)
+	logFile, err := openLogFile(p.LogFile)
 	if err != nil {
+		return nil, err
+	}
+	s, err := session.NewSerialSessionWithLog(p.Device, p.BaudRate, logFile)
+	if err != nil {
+		if logFile != nil {
+			logFile.Close()
+		}
 		return nil, err
 	}
 	target := fmt.Sprintf("%s@%d", p.Device, p.BaudRate)
@@ -188,12 +216,13 @@ type SessionIDParams struct {
 }
 
 type ReadOutputParams struct {
-	SessionID   string  `json:"session_id"`
-	Timeout     float64 `json:"timeout"`
-	WaitFor     string  `json:"wait_for"`
-	ContextLines int    `json:"context_lines"`
-	TailLines    int    `json:"tail_lines"`
-	SinceCursor *int64  `json:"since_cursor"`
+	SessionID    string  `json:"session_id"`
+	Timeout      float64 `json:"timeout"`
+	WaitFor      string  `json:"wait_for"`
+	ContextLines int     `json:"context_lines"`
+	TailLines    int     `json:"tail_lines"`
+	SinceCursor  *int64  `json:"since_cursor"`
+	MaxBytes     *int    `json:"max_bytes"`
 }
 
 type WaitForResult struct {
@@ -213,6 +242,18 @@ type WaitForParams struct {
 	Timeout      time.Duration
 	ContextLines int
 	TailLines    int
+}
+
+// openLogFile opens path for appending (creates if not exists). Returns nil if path is empty.
+func openLogFile(path string) (*os.File, error) {
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open log_file %q: %w", path, err)
+	}
+	return f, nil
 }
 
 func clampInt(v, lo, hi int) int {
@@ -250,12 +291,12 @@ func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForPa
 
 	// Check existing buffer content first
 	existing := rb.ReadSince(snapshot)
+	if rb.IsTruncated(snapshot) {
+		truncated = true
+	}
 	// Advance snapshot to current position so we only wait for new data
 	snapshot = rb.Snapshot()
 	if existing != "" {
-		if rb.IsTruncated(snapshot) {
-			truncated = true
-		}
 		lines := strings.Split(existing, "\n")
 		if len(lines) > 0 && !strings.HasSuffix(existing, "\n") {
 			remainder = lines[len(lines)-1]
@@ -286,10 +327,10 @@ func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForPa
 		}
 
 		chunk := rb.ReadSince(snapshot)
-		snapshot = rb.Snapshot()
 		if rb.IsTruncated(snapshot) {
 			truncated = true
 		}
+		snapshot = rb.Snapshot()
 
 		if chunk == "" {
 			continue
@@ -432,12 +473,17 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 	// Mode 2: incremental read from cursor position
 	if p.SinceCursor != nil {
 		rb := s.Buffer()
-		output := rb.ReadSince(*p.SinceCursor)
+		maxBytes := 0
+		if p.MaxBytes != nil && *p.MaxBytes > 0 {
+			maxBytes = *p.MaxBytes
+		}
+		output, newCursor, hasMore := rb.ReadSinceMax(*p.SinceCursor, maxBytes)
 		output = pty.StripANSI(output)
 		isTruncated := rb.IsTruncated(*p.SinceCursor)
 		return map[string]any{
 			"output":       output,
-			"cursor":       rb.Snapshot(),
+			"cursor":       newCursor,
+			"has_more":     hasMore,
 			"is_truncated": isTruncated,
 			"is_alive":     s.IsAlive(),
 		}, nil

@@ -4,7 +4,9 @@ package session
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,8 +21,11 @@ type SerialSession struct {
 	id        string
 	port      serial.Port
 	buf       *buffer.RingBuffer
+	writer    io.Writer
+	logFile   *os.File
 	alive     atomic.Bool
 	done      chan struct{}
+	readDone  chan struct{} // closed when readLoop exits
 	closeOnce sync.Once
 }
 
@@ -32,6 +37,10 @@ func isValidSerialDevice(device string) bool {
 }
 
 func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
+	return NewSerialSessionWithLog(device, baudRate, nil)
+}
+
+func NewSerialSessionWithLog(device string, baudRate int, logFile *os.File) (*SerialSession, error) {
 	if !isValidSerialDevice(device) {
 		return nil, fmt.Errorf("invalid serial device %q: must start with /dev/tty or /dev/cu. (e.g. /dev/ttyUSB0, /dev/cu.usbserial-XXXX)", device)
 	}
@@ -50,11 +59,20 @@ func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
 		return nil, fmt.Errorf("open serial %s: %w", device, err)
 	}
 
+	rb := buffer.NewRingBuffer(buffer.BufferSizeFromEnv())
+	var w io.Writer = rb
+	if logFile != nil {
+		w = io.MultiWriter(rb, logFile)
+	}
+
 	s := &SerialSession{
-		id:   NewID(),
-		port: port,
-		buf:  buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
-		done: make(chan struct{}),
+		id:       NewID(),
+		port:     port,
+		buf:      rb,
+		writer:   w,
+		logFile:  logFile,
+		done:     make(chan struct{}),
+		readDone: make(chan struct{}),
 	}
 	s.alive.Store(true)
 
@@ -68,6 +86,7 @@ func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
 }
 
 func (s *SerialSession) readLoop() {
+	defer close(s.readDone)
 	tmp := make([]byte, 1024)
 	for {
 		select {
@@ -81,7 +100,7 @@ func (s *SerialSession) readLoop() {
 				return
 			}
 			if n > 0 {
-				s.buf.Write(tmp[:n])
+				s.writer.Write(tmp[:n])
 			}
 		}
 	}
@@ -129,6 +148,10 @@ func (s *SerialSession) Close() error {
 		s.alive.Store(false)
 		close(s.done)
 		closeErr = s.port.Close()
+		if s.logFile != nil {
+			<-s.readDone // wait for readLoop to finish writing
+			s.logFile.Close()
+		}
 	})
 	return closeErr
 }

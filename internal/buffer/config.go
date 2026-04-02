@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	DefaultBufferSize = 256 * 1024      // 256KB
-	MinBufferSize     = 64 * 1024       // 64KB
-	MaxBufferSize     = 4 * 1024 * 1024 // 4MB
+	DefaultBufferSize = 1024 * 1024      // 1MB
+	MinBufferSize     = 64 * 1024        // 64KB
+	MaxBufferSize     = 32 * 1024 * 1024 // 32MB
 )
 
 func BufferSizeFromEnv() int {

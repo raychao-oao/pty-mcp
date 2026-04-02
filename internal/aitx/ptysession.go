@@ -23,6 +23,9 @@ type PTYSession struct {
 	cmd       *exec.Cmd
 	ptyFile   *os.File
 	buf       *buffer.RingBuffer
+	writer    io.Writer // = buf, or MultiWriter(buf, logFile)
+	logFile   *os.File
+	readDone  chan struct{} // closed when the read goroutine exits
 	alive     atomic.Bool
 	closeOnce sync.Once
 	createdAt time.Time
@@ -30,6 +33,14 @@ type PTYSession struct {
 }
 
 func NewPTYSession(id, name, command string) (*PTYSession, error) {
+	return newPTYSession(id, name, command, nil)
+}
+
+func NewPTYSessionWithLog(id, name, command string, logFile *os.File) (*PTYSession, error) {
+	return newPTYSession(id, name, command, logFile)
+}
+
+func newPTYSession(id, name, command string, logFile *os.File) (*PTYSession, error) {
 	if command == "" {
 		command = "/bin/bash"
 	}
@@ -48,13 +59,22 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 	// set terminal size
 	pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
 
+	rb := buffer.NewRingBuffer(buffer.BufferSizeFromEnv())
+	var w io.Writer = rb
+	if logFile != nil {
+		w = io.MultiWriter(rb, logFile)
+	}
+
 	s := &PTYSession{
 		id:        id,
 		name:      name,
 		command:   command,
 		cmd:       cmd,
 		ptyFile:   ptmx,
-		buf:       buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
+		buf:       rb,
+		writer:    w,
+		logFile:   logFile,
+		readDone:  make(chan struct{}),
 		createdAt: time.Now(),
 	}
 	s.alive.Store(true)
@@ -62,11 +82,12 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 
 	// read PTY output in background
 	go func() {
+		defer close(s.readDone)
 		tmp := make([]byte, 4096)
 		for {
 			n, err := ptmx.Read(tmp)
 			if n > 0 {
-				s.buf.Write(tmp[:n])
+				s.writer.Write(tmp[:n])
 			}
 			if err != nil {
 				if err != io.EOF {
@@ -141,6 +162,10 @@ func (s *PTYSession) Close() error {
 		}
 		if s.cmd != nil && s.cmd.Process != nil {
 			s.cmd.Process.Kill()
+		}
+		if s.logFile != nil {
+			<-s.readDone // wait for read goroutine to finish writing
+			s.logFile.Close()
 		}
 	})
 	return closeErr

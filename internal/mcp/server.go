@@ -50,13 +50,15 @@ var toolsList = []map[string]any{
 			"persistent": map[string]any{"type": "boolean", "description": "Use ai-tmux for persistent session (survives SSH disconnect)"},
 			"command":    map[string]any{"type": "string", "description": "Initial command for persistent session (default: /bin/bash)"},
 			"session_id": map[string]any{"type": "string", "description": "Attach to existing ai-tmux session by ID (use list_remote_sessions to find IDs)"},
+			"log_file":   map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size (e.g. long-running scripts). File is created if it doesn't exist."},
 		},
 		"required": []string{"host", "user"},
 	}},
 	{"name": "create_local_session", "description": "Open a local interactive terminal session (bash, python3, node, etc.). WARNING: Executes as the current user with full local system access — this is by design for legitimate sysadmin automation. Only use on trusted systems.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"command": map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
+			"command":  map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
+			"log_file": map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size. File is created if it doesn't exist."},
 		},
 	}},
 	{"name": "create_serial_session", "description": "Open a serial port session. Device path must start with /dev/tty or /dev/cu. (e.g. /dev/ttyUSB0, /dev/cu.usbserial-XXXX)", "inputSchema": map[string]any{
@@ -64,6 +66,7 @@ var toolsList = []map[string]any{
 		"properties": map[string]any{
 			"device":    map[string]any{"type": "string", "description": "Serial device path (must start with /dev/tty or /dev/cu.)"},
 			"baud_rate": map[string]any{"type": "integer", "description": "Baud rate (default: 9600)"},
+			"log_file":  map[string]any{"type": "string", "description": "File path to append all session output. File is created if it doesn't exist."},
 		},
 		"required": []string{"device"},
 	}},
@@ -76,12 +79,13 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id", "input"},
 	}},
-	{"name": "read_output", "description": "Read output from a session. Three modes: (1) default: wait for output to settle, (2) since_cursor: incremental read from a cursor position (returns only new output), (3) wait_for: block until a regex pattern matches.", "inputSchema": map[string]any{
+	{"name": "read_output", "description": "Read output from a session. Three modes: (1) default: wait for output to settle, (2) since_cursor: incremental read from a cursor position (returns only new output), (3) wait_for: block until a regex pattern matches. Mode 2 response includes has_more (true = more unread data, call again with new cursor) and is_truncated (true = data was overwritten before you read it).", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"session_id":    map[string]any{"type": "string", "description": "Session ID to read from"},
 			"timeout":       map[string]any{"type": "number", "description": "Max wait time in seconds (default: 5, max: 600)"},
 			"since_cursor":  map[string]any{"type": "integer", "description": "Read only output written after this cursor position. Get cursor from previous read_output/send_input/get_session_state responses."},
+			"max_bytes":     map[string]any{"type": "integer", "description": "Maximum bytes to return in a single read (mode 2 only). If output exceeds this, has_more=true and you should call again with the returned cursor. Recommended: 32768 (32KB) to avoid large context usage."},
 			"wait_for":      map[string]any{"type": "string", "description": "Regex pattern to wait for. Falls back to plain text match if regex is invalid."},
 			"context_lines": map[string]any{"type": "integer", "description": "Lines before/after matched line to include (default: 0, max: 50). Only with wait_for."},
 			"tail_lines":    map[string]any{"type": "integer", "description": "On timeout, include last N lines of output (default: 0, max: 100). Only with wait_for."},
@@ -170,7 +174,7 @@ func handle(h *Handler, req *request) response {
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.4.0"},
+			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.5.0"},
 		}}
 	case "tools/list":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": toolsList}}

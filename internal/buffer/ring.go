@@ -74,6 +74,53 @@ func (rb *RingBuffer) IsTruncated(snapshot int64) bool {
 	return snapshot < oldest
 }
 
+// ReadSinceMax returns up to maxBytes of content written after snapshot.
+// Returns the content, the new cursor position after what was read, and
+// whether more unread data remains in the buffer.
+// If maxBytes <= 0, it behaves like ReadSince (no limit).
+func (rb *RingBuffer) ReadSinceMax(snapshot int64, maxBytes int) (string, int64, bool) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+
+	available := rb.written
+	if available > int64(rb.size) {
+		available = int64(rb.size)
+	}
+
+	oldest := rb.written - available
+	if snapshot < oldest {
+		snapshot = oldest
+	}
+
+	// Clamp snapshot to valid range [oldest, written]
+	if snapshot > rb.written {
+		snapshot = rb.written
+	}
+
+	count := rb.written - snapshot
+	if count <= 0 {
+		return "", snapshot, false
+	}
+	if count > int64(rb.size) {
+		count = int64(rb.size)
+	}
+
+	hasMore := false
+	if maxBytes > 0 && count > int64(maxBytes) {
+		count = int64(maxBytes)
+		hasMore = true
+	}
+
+	start := (rb.head - int(rb.written-snapshot) + rb.size*2) % rb.size
+	out := make([]byte, count)
+	for i := int64(0); i < count; i++ {
+		out[i] = rb.buf[(start+int(i))%rb.size]
+	}
+
+	newCursor := snapshot + count
+	return string(out), newCursor, hasMore
+}
+
 // ReadSince returns the content written after snapshot. If the snapshot is
 // too old (data already overwritten), it returns all available content.
 func (rb *RingBuffer) ReadSince(snapshot int64) string {

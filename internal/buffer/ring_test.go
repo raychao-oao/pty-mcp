@@ -141,3 +141,47 @@ func TestRingBuffer_SinceAndMark(t *testing.T) {
 		t.Errorf("Since() should contain 'new data', got %q", since3)
 	}
 }
+
+// TestRingBuffer_ReadSinceMax — chunked reads with max_bytes
+func TestRingBuffer_ReadSinceMax(t *testing.T) {
+	rb := NewRingBuffer(1024)
+	snap := rb.Snapshot()
+
+	rb.Write([]byte("abcdefghij")) // 10 bytes
+
+	// Read with max_bytes=4: should get first 4 bytes and has_more=true
+	out, cur, hasMore := rb.ReadSinceMax(snap, 4)
+	if out != "abcd" {
+		t.Errorf("expected %q, got %q", "abcd", out)
+	}
+	if !hasMore {
+		t.Errorf("expected has_more=true")
+	}
+
+	// Continue reading from new cursor
+	out2, cur2, hasMore2 := rb.ReadSinceMax(cur, 4)
+	if out2 != "efgh" {
+		t.Errorf("expected %q, got %q", "efgh", out2)
+	}
+	if !hasMore2 {
+		t.Errorf("expected has_more=true")
+	}
+
+	// Read remaining 2 bytes
+	out3, _, hasMore3 := rb.ReadSinceMax(cur2, 4)
+	if out3 != "ij" {
+		t.Errorf("expected %q, got %q", "ij", out3)
+	}
+	if hasMore3 {
+		t.Errorf("expected has_more=false")
+	}
+
+	// No max_bytes (0) = read all
+	out4, _, hasMore4 := rb.ReadSinceMax(snap, 0)
+	if out4 != "abcdefghij" {
+		t.Errorf("expected full output, got %q", out4)
+	}
+	if hasMore4 {
+		t.Errorf("expected has_more=false with no limit")
+	}
+}

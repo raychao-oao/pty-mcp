@@ -36,6 +36,7 @@ type SSHSession struct {
 	session   *gossh.Session
 	stdin     io.WriteCloser
 	buf       *buffer.RingBuffer
+	logFile   *os.File
 	alive     atomic.Bool
 	closeOnce sync.Once
 }
@@ -73,6 +74,10 @@ func resolveSSHConfig(cfg *SSHConfig) {
 }
 
 func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
+	return NewSSHSessionWithLog(cfg, nil)
+}
+
+func NewSSHSessionWithLog(cfg SSHConfig, logFile *os.File) (*SSHSession, error) {
 	resolveSSHConfig(&cfg)
 
 	authMethods, err := buildAuthMethods(cfg)
@@ -113,17 +118,24 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
 	}
 
+	rb := buffer.NewRingBuffer(buffer.BufferSizeFromEnv())
+	var w io.Writer = rb
+	if logFile != nil {
+		w = io.MultiWriter(rb, logFile)
+	}
+
 	s := &SSHSession{
 		id:      NewID(),
 		client:  client,
 		session: sess,
 		stdin:   stdinPipe,
-		buf:     buffer.NewRingBuffer(buffer.BufferSizeFromEnv()),
+		buf:     rb,
+		logFile: logFile,
 	}
 	s.alive.Store(true)
 
-	sess.Stdout = s.buf
-	sess.Stderr = s.buf
+	sess.Stdout = w
+	sess.Stderr = w
 
 	if err := sess.RequestPty("xterm-256color", 40, 120, gossh.TerminalModes{
 		gossh.ECHO:          1,
@@ -428,6 +440,9 @@ func (s *SSHSession) Close() error {
 		}
 		if s.client != nil {
 			closeErr = s.client.Close()
+		}
+		if s.logFile != nil {
+			s.logFile.Close()
 		}
 	})
 	return closeErr
