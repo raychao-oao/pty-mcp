@@ -4,7 +4,7 @@
 
 set -e
 
-VERSION="v0.4.0"
+VERSION="v0.5.0"
 REPO="raychao-oao/pty-mcp"
 BIN_DIR="${CLAUDE_PLUGIN_ROOT}/bin"
 BIN_PATH="${BIN_DIR}/pty-mcp"
