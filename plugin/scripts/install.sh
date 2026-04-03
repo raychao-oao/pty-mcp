@@ -9,9 +9,13 @@ REPO="raychao-oao/pty-mcp"
 BIN_DIR="${CLAUDE_PLUGIN_ROOT}/bin"
 BIN_PATH="${BIN_DIR}/pty-mcp"
 
-# Skip if already installed
+# Skip if already installed at correct version
 if [ -f "${BIN_PATH}" ]; then
-    exit 0
+    INSTALLED=$("${BIN_PATH}" --version 2>/dev/null | awk '{print $NF}')
+    if [ "${INSTALLED}" = "${VERSION}" ]; then
+        exit 0
+    fi
+    echo "[pty-mcp] Upgrading from ${INSTALLED} to ${VERSION}..."
 fi
 
 mkdir -p "${BIN_DIR}"
