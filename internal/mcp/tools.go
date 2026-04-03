@@ -13,12 +13,33 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mitchellh/mapstructure"
 	"golang.org/x/term"
 
 	"github.com/raychao-oao/pty-mcp/internal/buffer"
 	"github.com/raychao-oao/pty-mcp/internal/pty"
 	"github.com/raychao-oao/pty-mcp/internal/session"
 )
+
+// UnmarshalMcpArgs decodes MCP tool arguments into target struct using weak type coercion.
+// Some MCP clients (e.g. Claude Code) incorrectly serialize all parameter values as JSON strings
+// (e.g. "timeout_ms": "5000" instead of "timeout_ms": 5000). WeaklyTypedInput handles this
+// transparently so struct fields can use standard Go types (bool, int, float64).
+func UnmarshalMcpArgs(data json.RawMessage, target any) error {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           target,
+		TagName:          "json",
+	})
+	if err != nil {
+		return err
+	}
+	return dec.Decode(raw)
+}
 
 type Handler struct {
 	mgr *session.Manager
@@ -43,7 +64,7 @@ type CreateSSHParams struct {
 
 func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 	var p CreateSSHParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	cfg := session.SSHConfig{
@@ -98,7 +119,7 @@ type ListRemoteParams struct {
 
 func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
 	var p ListRemoteParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	cfg := session.SSHConfig{
@@ -123,7 +144,7 @@ type CreateLocalParams struct {
 
 func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
 	var p CreateLocalParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	if p.Command == "" {
@@ -154,7 +175,7 @@ type CreateSerialParams struct {
 
 func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
 	var p CreateSerialParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	logFile, err := openLogFile(p.LogFile)
@@ -179,11 +200,12 @@ type SendInputParams struct {
 	SessionID string `json:"session_id"`
 	Input     string `json:"input"`
 	TimeoutMs int    `json:"timeout_ms"`
+	Raw       bool   `json:"raw"` // if true, send input as-is without appending newline
 }
 
 func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	var p SendInputParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	if p.TimeoutMs <= 0 {
@@ -204,11 +226,26 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 		output, isComplete := rs.ReadScreen(p.TimeoutMs)
 		return map[string]any{"output": output, "cursor": rs.Buffer().Snapshot(), "is_alive": rs.IsAlive(), "is_complete": isComplete}, nil
 	}
-	if err := s.Write(p.Input); err != nil {
-		return nil, err
+	cursorStart := s.Buffer().Snapshot()
+	if p.Raw {
+		if err := s.WriteRaw(p.Input); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.Write(p.Input); err != nil {
+			return nil, err
+		}
 	}
 	output, isComplete := s.ReadScreen(p.TimeoutMs)
-	return map[string]any{"output": output, "cursor": s.Buffer().Snapshot(), "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
+	cursorEnd := s.Buffer().Snapshot()
+	return map[string]any{
+		"output":       output,
+		"cursor":       cursorEnd,
+		"cursor_start": cursorStart,
+		"cursor_end":   cursorEnd,
+		"is_alive":     s.IsAlive(),
+		"is_complete":  isComplete,
+	}, nil
 }
 
 type SessionIDParams struct {
@@ -433,7 +470,7 @@ func tailFromCollected(collected []string, n int) string {
 
 func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 	var p ReadOutputParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	s, err := h.mgr.Get(p.SessionID)
@@ -524,7 +561,7 @@ var controlKeys = map[string]string{
 
 func (h *Handler) SendControl(params json.RawMessage) (any, error) {
 	var p SendControlParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	seq, ok := controlKeys[p.Key]
@@ -552,7 +589,7 @@ func supportedKeys() []string {
 
 func (h *Handler) GetSessionState(params json.RawMessage) (any, error) {
 	var p SessionIDParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	s, err := h.mgr.Get(p.SessionID)
@@ -560,15 +597,26 @@ func (h *Handler) GetSessionState(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	info := h.mgr.GetInfo(p.SessionID)
-	return map[string]any{
-		"session_id": s.ID(),
-		"type":       s.Type(),
-		"target":     info.Target,
-		"is_alive":   s.IsAlive(),
-		"cursor":     s.Buffer().Snapshot(),
-		"created_at": info.CreatedAt,
-		"last_used":  info.LastUsed,
-	}, nil
+	rb := s.Buffer()
+	cursor := rb.Snapshot()
+
+	// Classify last 2KB of output to determine current state
+	lastChunk, _, _ := rb.ReadSinceMax(cursor-2048, 0)
+	cls := session.ClassifyOutput(lastChunk)
+
+	result := map[string]any{
+		"session_id":     s.ID(),
+		"type":           s.Type(),
+		"target":         info.Target,
+		"is_alive":       s.IsAlive(),
+		"cursor":         cursor,
+		"state":          cls.State,
+		"awaiting_secret": cls.AwaitingSecret,
+		"last_prompt":    cls.LastPrompt,
+		"created_at":     info.CreatedAt,
+		"last_used":      info.LastUsed,
+	}
+	return result, nil
 }
 
 func (h *Handler) ListSessions(_ json.RawMessage) (any, error) {
@@ -577,7 +625,7 @@ func (h *Handler) ListSessions(_ json.RawMessage) (any, error) {
 
 func (h *Handler) CloseSession(params json.RawMessage) (any, error) {
 	var p SessionIDParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	if err := h.mgr.Close(p.SessionID); err != nil {
@@ -588,7 +636,7 @@ func (h *Handler) CloseSession(params json.RawMessage) (any, error) {
 
 func (h *Handler) DetachSession(params json.RawMessage) (any, error) {
 	var p SessionIDParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	if err := h.mgr.Detach(p.SessionID); err != nil {
@@ -604,7 +652,7 @@ type SendSecretParams struct {
 
 func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 	var p SendSecretParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	s, err := h.mgr.Get(p.SessionID)

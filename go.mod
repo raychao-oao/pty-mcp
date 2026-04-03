@@ -12,6 +12,7 @@ require (
 
 require (
 	github.com/creack/goselect v0.1.2 // indirect
+	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/term v0.41.0 // indirect
 )

@@ -70,12 +70,13 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"device"},
 	}},
-	{"name": "send_input", "description": "Send a command and wait for output to settle. Returns is_complete (false = timeout, use read_output for remaining output)", "inputSchema": map[string]any{
+	{"name": "send_input", "description": "Send input and wait for output to settle. Returns cursor_start/cursor_end for command boundary tracking, and is_complete (false = timeout, use read_output for remaining output).", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
 			"input":      map[string]any{"type": "string"},
 			"timeout_ms": map[string]any{"type": "integer", "description": "Max wait time in ms (default: 5000, max: 30000)"},
+			"raw":        map[string]any{"type": "boolean", "description": "If true, send input exactly as-is without appending a newline. Use for interactive menus and single-character inputs (e.g. menu selections, y/n prompts). Follow with send_control('enter') when ready to submit."},
 		},
 		"required": []string{"session_id", "input"},
 	}},
@@ -105,7 +106,7 @@ var toolsList = []map[string]any{
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}, "key": map[string]any{"type": "string"}},
 		"required": []string{"session_id", "key"},
 	}},
-	{"name": "get_session_state", "description": "Get detailed state of a session: type, target, is_alive, buffer cursor position, timestamps. Use cursor with read_output(since_cursor=...) for incremental reads.", "inputSchema": map[string]any{
+	{"name": "get_session_state", "description": "Get detailed state of a session: type, target, is_alive, cursor, and classified state (at_prompt/password_prompt/confirmation/pager/running/unknown), awaiting_secret, last_prompt. Use cursor with read_output(since_cursor=...) for incremental reads.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
@@ -174,7 +175,7 @@ func handle(h *Handler, req *request) response {
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.5.0"},
+			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.6.0"},
 		}}
 	case "tools/list":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": toolsList}}
