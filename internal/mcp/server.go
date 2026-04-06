@@ -184,7 +184,7 @@ func handle(h *Handler, req *request) response {
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.7.0"},
+			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.7.1"},
 		}}
 	case "tools/list":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": toolsList}}
