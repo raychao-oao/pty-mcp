@@ -1,6 +1,6 @@
 {
   "name": "pty-mcp",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Interactive PTY sessions for AI agents: local shell, SSH, serial port, and persistent remote sessions.",
   "author": {
     "name": "raychao-oao",
