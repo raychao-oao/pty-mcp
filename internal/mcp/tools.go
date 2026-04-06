@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
+	"sync"
 	"os/signal"
 	"regexp"
 	"runtime"
@@ -275,7 +277,10 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 			ContextLines: 0,
 			TailLines:    20,
 		})
-		s.Buffer().Mark()
+		// Only advance mark on match; on timeout, leave output available for follow-up read_output
+		if result.Matched {
+			s.Buffer().Mark()
+		}
 		result.Cursor = s.Buffer().Snapshot()
 		return result, nil
 	}
@@ -328,6 +333,7 @@ type WaitForParams struct {
 
 // logRotator is an io.WriteCloser that rotates log files when they exceed maxSize.
 type logRotator struct {
+	mu       sync.Mutex
 	path     string
 	maxSize  int64 // bytes; 0 = no rotation
 	maxFiles int
@@ -358,8 +364,13 @@ func newLogRotator(path string, maxSizeMB int, maxFiles int) (*logRotator, error
 }
 
 func (r *logRotator) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.maxSize > 0 && r.size+int64(len(p)) > r.maxSize {
 		r.rotate()
+	}
+	if r.file == nil {
+		return 0, fmt.Errorf("log file closed")
 	}
 	n, err := r.file.Write(p)
 	r.size += int64(n)
@@ -367,7 +378,14 @@ func (r *logRotator) Write(p []byte) (int, error) {
 }
 
 func (r *logRotator) Close() error {
-	return r.file.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return nil
+	}
+	err := r.file.Close()
+	r.file = nil
+	return err
 }
 
 func (r *logRotator) rotate() {
@@ -377,7 +395,13 @@ func (r *logRotator) rotate() {
 		os.Rename(fmt.Sprintf("%s.%d", r.path, i-1), fmt.Sprintf("%s.%d", r.path, i))
 	}
 	os.Rename(r.path, r.path+".1")
-	r.file, _ = os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("logRotator: failed to open new log file: %v", err)
+		r.file = nil
+		return
+	}
+	r.file = f
 	r.size = 0
 }
 
@@ -493,6 +517,10 @@ func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForPa
 			// Before timing out, check remainder (prompt lines don't end with newline)
 			if r := matchRemainder(); r != nil {
 				return *r
+			}
+			// Include remainder in tail so timeout result shows the last partial line (e.g. prompt)
+			if remainder != "" {
+				collected = append(collected, pty.StripANSI(remainder))
 			}
 			return buildTimeoutResult(collected, params, warning, truncated, isAlive())
 		}
@@ -641,8 +669,10 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 			ContextLines: contextLines,
 			TailLines:    tailLines,
 		})
-		// Advance mark to current position so next read_output starts fresh
-		s.Buffer().Mark()
+		// Only advance mark on match; on timeout, leave output available for follow-up reads
+		if result.Matched {
+			s.Buffer().Mark()
+		}
 		result.Cursor = s.Buffer().Snapshot()
 		return result, nil
 	}
