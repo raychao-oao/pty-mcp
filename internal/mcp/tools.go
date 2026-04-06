@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -50,16 +51,18 @@ func NewHandler(mgr *session.Manager) *Handler {
 }
 
 type CreateSSHParams struct {
-	Host       string `json:"host"`
-	Port       string `json:"port"`
-	User       string `json:"user"`
-	Password   string `json:"password"`
-	KeyPath    string `json:"key_path"`
-	IgnoreHost bool   `json:"ignore_host_key"`
-	Persistent bool   `json:"persistent"`  // use ai-tmux persistent session
-	Command    string `json:"command"`     // initial command in persistent mode
-	SessionID  string `json:"session_id"`  // reattach to an existing ai-tmux session
-	LogFile    string `json:"log_file"`    // append all output to this file path
+	Host         string `json:"host"`
+	Port         string `json:"port"`
+	User         string `json:"user"`
+	Password     string `json:"password"`
+	KeyPath      string `json:"key_path"`
+	IgnoreHost   bool   `json:"ignore_host_key"`
+	Persistent   bool   `json:"persistent"`      // use ai-tmux persistent session
+	Command      string `json:"command"`          // initial command in persistent mode
+	SessionID    string `json:"session_id"`       // reattach to an existing ai-tmux session
+	LogFile      string `json:"log_file"`         // append all output to this file path
+	LogMaxSizeMB int    `json:"log_max_size"`     // max log file size in MB before rotation (0 = no rotation)
+	LogMaxFiles  int    `json:"log_max_files"`    // max number of rotated log files to keep (default: 3)
 }
 
 func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
@@ -75,7 +78,7 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 		KeyPath:    p.KeyPath,
 		IgnoreHost: p.IgnoreHost,
 	}
-	logFile, err := openLogFile(p.LogFile)
+	logWriter, err := openLogWriter(p.LogFile, p.LogMaxSizeMB, p.LogMaxFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -84,20 +87,20 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 	var sessionType string
 
 	if p.Persistent || p.SessionID != "" {
-		if logFile != nil {
-			logFile.Close() // remote sessions don't support log_file yet
-			logFile = nil
+		if logWriter != nil {
+			logWriter.Close() // remote sessions don't support log_file yet
+			logWriter = nil
 		}
 		s, err = session.NewRemoteSSHSession(cfg, p.Command, p.SessionID)
 		sessionType = "remote"
 	} else {
-		s, err = session.NewSSHSessionWithLog(cfg, logFile)
+		s, err = session.NewSSHSessionWithLog(cfg, logWriter)
 		sessionType = "ssh"
 	}
 
 	if err != nil {
-		if logFile != nil {
-			logFile.Close()
+		if logWriter != nil {
+			logWriter.Close()
 		}
 		return nil, err
 	}
@@ -115,6 +118,7 @@ type ListRemoteParams struct {
 	Password   string `json:"password"`
 	KeyPath    string `json:"key_path"`
 	IgnoreHost bool   `json:"ignore_host_key"`
+	Status     string `json:"status"` // filter by status: "running", "idle", etc.
 }
 
 func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
@@ -134,12 +138,23 @@ func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.Status != "" {
+		filtered := make([]map[string]any, 0, len(sessions))
+		for _, s := range sessions {
+			if status, ok := s["status"].(string); ok && status == p.Status {
+				filtered = append(filtered, s)
+			}
+		}
+		return filtered, nil
+	}
 	return sessions, nil
 }
 
 type CreateLocalParams struct {
-	Command string `json:"command"`  // default /bin/bash
-	LogFile string `json:"log_file"` // append all output to this file path
+	Command      string `json:"command"`       // default /bin/bash
+	LogFile      string `json:"log_file"`      // append all output to this file path
+	LogMaxSizeMB int    `json:"log_max_size"`  // max log file size in MB before rotation (0 = no rotation)
+	LogMaxFiles  int    `json:"log_max_files"` // max number of rotated log files to keep (default: 3)
 }
 
 func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
@@ -150,14 +165,14 @@ func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
 	if p.Command == "" {
 		p.Command = "/bin/bash"
 	}
-	logFile, err := openLogFile(p.LogFile)
+	logWriter, err := openLogWriter(p.LogFile, p.LogMaxSizeMB, p.LogMaxFiles)
 	if err != nil {
 		return nil, err
 	}
-	s, err := session.NewLocalSessionWithLog(p.Command, logFile)
+	s, err := session.NewLocalSessionWithLog(p.Command, logWriter)
 	if err != nil {
-		if logFile != nil {
-			logFile.Close()
+		if logWriter != nil {
+			logWriter.Close()
 		}
 		return nil, err
 	}
@@ -168,9 +183,11 @@ func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
 }
 
 type CreateSerialParams struct {
-	Device   string `json:"device"`
-	BaudRate int    `json:"baud_rate"`
-	LogFile  string `json:"log_file"` // append all output to this file path
+	Device       string `json:"device"`
+	BaudRate     int    `json:"baud_rate"`
+	LogFile      string `json:"log_file"`      // append all output to this file path
+	LogMaxSizeMB int    `json:"log_max_size"`  // max log file size in MB before rotation (0 = no rotation)
+	LogMaxFiles  int    `json:"log_max_files"` // max number of rotated log files to keep (default: 3)
 }
 
 func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
@@ -178,14 +195,14 @@ func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
-	logFile, err := openLogFile(p.LogFile)
+	logWriter, err := openLogWriter(p.LogFile, p.LogMaxSizeMB, p.LogMaxFiles)
 	if err != nil {
 		return nil, err
 	}
-	s, err := session.NewSerialSessionWithLog(p.Device, p.BaudRate, logFile)
+	s, err := session.NewSerialSessionWithLog(p.Device, p.BaudRate, logWriter)
 	if err != nil {
-		if logFile != nil {
-			logFile.Close()
+		if logWriter != nil {
+			logWriter.Close()
 		}
 		return nil, err
 	}
@@ -197,10 +214,12 @@ func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
 }
 
 type SendInputParams struct {
-	SessionID string `json:"session_id"`
-	Input     string `json:"input"`
-	TimeoutMs int    `json:"timeout_ms"`
-	Raw       bool   `json:"raw"` // if true, send input as-is without appending newline
+	SessionID      string  `json:"session_id"`
+	Input          string  `json:"input"`
+	TimeoutMs      int     `json:"timeout_ms"`
+	Raw            bool    `json:"raw"`              // if true, send input as-is without appending newline
+	WaitFor        string  `json:"wait_for"`         // regex pattern to wait for after sending input
+	WaitForTimeout float64 `json:"wait_for_timeout"` // timeout in seconds for wait_for (default: 10, max: 600)
 }
 
 func (h *Handler) SendInput(params json.RawMessage) (any, error) {
@@ -236,6 +255,31 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 			return nil, err
 		}
 	}
+
+	// If wait_for is set, use pattern matching instead of ReadScreen
+	if p.WaitFor != "" {
+		wfTimeout := p.WaitForTimeout
+		if wfTimeout <= 0 {
+			wfTimeout = 10
+		}
+		if wfTimeout > 600 {
+			wfTimeout = 600
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wfTimeout*float64(time.Second)))
+		defer cancel()
+		go s.PollRemote(ctx)
+
+		result := waitForPattern(s.Buffer(), s.IsAlive, WaitForParams{
+			WaitFor:      p.WaitFor,
+			Timeout:      time.Duration(wfTimeout * float64(time.Second)),
+			ContextLines: 0,
+			TailLines:    20,
+		})
+		s.Buffer().Mark()
+		result.Cursor = s.Buffer().Snapshot()
+		return result, nil
+	}
+
 	output, isComplete := s.ReadScreen(p.TimeoutMs)
 	cursorEnd := s.Buffer().Snapshot()
 	return map[string]any{
@@ -264,6 +308,7 @@ type ReadOutputParams struct {
 
 type WaitForResult struct {
 	Matched     bool   `json:"matched"`
+	TimedOut    bool   `json:"timed_out,omitempty"`
 	MatchLine   string `json:"match_line,omitempty"`
 	Context     string `json:"context,omitempty"`
 	Cursor      int64  `json:"cursor"`
@@ -281,16 +326,67 @@ type WaitForParams struct {
 	TailLines    int
 }
 
-// openLogFile opens path for appending (creates if not exists). Returns nil if path is empty.
-func openLogFile(path string) (*os.File, error) {
-	if path == "" {
-		return nil, nil
-	}
+// logRotator is an io.WriteCloser that rotates log files when they exceed maxSize.
+type logRotator struct {
+	path     string
+	maxSize  int64 // bytes; 0 = no rotation
+	maxFiles int
+	file     *os.File
+	size     int64
+}
+
+func newLogRotator(path string, maxSizeMB int, maxFiles int) (*logRotator, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("open log_file %q: %w", path, err)
 	}
-	return f, nil
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if maxFiles <= 0 {
+		maxFiles = 3
+	}
+	return &logRotator{
+		path:     path,
+		maxSize:  int64(maxSizeMB) * 1024 * 1024,
+		maxFiles: maxFiles,
+		file:     f,
+		size:     info.Size(),
+	}, nil
+}
+
+func (r *logRotator) Write(p []byte) (int, error) {
+	if r.maxSize > 0 && r.size+int64(len(p)) > r.maxSize {
+		r.rotate()
+	}
+	n, err := r.file.Write(p)
+	r.size += int64(n)
+	return n, err
+}
+
+func (r *logRotator) Close() error {
+	return r.file.Close()
+}
+
+func (r *logRotator) rotate() {
+	r.file.Close()
+	// shift existing backups: .3 → .4, .2 → .3, .1 → .2
+	for i := r.maxFiles; i > 1; i-- {
+		os.Rename(fmt.Sprintf("%s.%d", r.path, i-1), fmt.Sprintf("%s.%d", r.path, i))
+	}
+	os.Rename(r.path, r.path+".1")
+	r.file, _ = os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY, 0644)
+	r.size = 0
+}
+
+// openLogWriter returns a log writer with optional rotation. Returns nil if path is empty.
+func openLogWriter(path string, maxSizeMB int, maxFiles int) (io.WriteCloser, error) {
+	if path == "" {
+		return nil, nil
+	}
+	return newLogRotator(path, maxSizeMB, maxFiles)
 }
 
 func clampInt(v, lo, hi int) int {
@@ -355,11 +451,49 @@ func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForPa
 				return buildMatchResult(clean, collected, params.ContextLines, warning, truncated, isAlive())
 			}
 		}
+		// Check remainder from existing buffer (e.g. prompt already sitting without newline)
+		if remainder != "" {
+			clean := pty.StripANSI(remainder)
+			matched := false
+			if usePlainMatch {
+				matched = strings.Contains(clean, params.WaitFor)
+			} else {
+				matched = re.MatchString(clean)
+			}
+			if matched {
+				collected = append(collected, clean)
+				return buildMatchResult(clean, collected, params.ContextLines, warning, truncated, isAlive())
+			}
+		}
+	}
+
+	// matchRemainder checks the incomplete trailing line (e.g. a shell prompt without newline)
+	matchRemainder := func() *WaitForResult {
+		if remainder == "" {
+			return nil
+		}
+		clean := pty.StripANSI(remainder)
+		matched := false
+		if usePlainMatch {
+			matched = strings.Contains(clean, params.WaitFor)
+		} else {
+			matched = re.MatchString(clean)
+		}
+		if matched {
+			collected = append(collected, clean)
+			result := buildMatchResult(clean, collected, params.ContextLines, warning, truncated, isAlive())
+			return &result
+		}
+		return nil
 	}
 
 	// Main loop: wait for new data
 	for {
 		if !rb.Wait(ctx) {
+			// Before timing out, check remainder (prompt lines don't end with newline)
+			if r := matchRemainder(); r != nil {
+				return *r
+			}
 			return buildTimeoutResult(collected, params, warning, truncated, isAlive())
 		}
 
@@ -397,6 +531,11 @@ func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForPa
 			if matched {
 				return buildMatchResult(clean, collected, params.ContextLines, warning, truncated, isAlive())
 			}
+		}
+
+		// Check remainder after processing lines — prompt may have arrived without newline
+		if r := matchRemainder(); r != nil {
+			return *r
 		}
 
 		if !isAlive() {
@@ -441,9 +580,10 @@ func buildMatchResult(matchLine string, collected []string, contextLines int, wa
 
 func buildTimeoutResult(collected []string, params WaitForParams, warning string, truncated bool, alive bool) WaitForResult {
 	result := WaitForResult{
-		Matched: false,
-		Error:   fmt.Sprintf("timeout after %ds", int(params.Timeout.Seconds())),
-		IsAlive: alive,
+		Matched:  false,
+		TimedOut: true,
+		Error:    fmt.Sprintf("timeout after %ds", int(params.Timeout.Seconds())),
+		IsAlive:  alive,
 	}
 	if warning != "" {
 		result.Warning = warning

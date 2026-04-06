@@ -36,7 +36,7 @@ type SSHSession struct {
 	session   *gossh.Session
 	stdin     io.WriteCloser
 	buf       *buffer.RingBuffer
-	logFile   *os.File
+	logFile   io.WriteCloser
 	alive     atomic.Bool
 	closeOnce sync.Once
 }
@@ -77,7 +77,7 @@ func NewSSHSession(cfg SSHConfig) (*SSHSession, error) {
 	return NewSSHSessionWithLog(cfg, nil)
 }
 
-func NewSSHSessionWithLog(cfg SSHConfig, logFile *os.File) (*SSHSession, error) {
+func NewSSHSessionWithLog(cfg SSHConfig, logFile io.WriteCloser) (*SSHSession, error) {
 	resolveSSHConfig(&cfg)
 
 	authMethods, err := buildAuthMethods(cfg)

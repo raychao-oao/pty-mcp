@@ -24,7 +24,7 @@ type PTYSession struct {
 	ptyFile   *os.File
 	buf       *buffer.RingBuffer
 	writer    io.Writer // = buf, or MultiWriter(buf, logFile)
-	logFile   *os.File
+	logFile   io.WriteCloser
 	readDone  chan struct{} // closed when the read goroutine exits
 	alive     atomic.Bool
 	closeOnce sync.Once
@@ -36,11 +36,11 @@ func NewPTYSession(id, name, command string) (*PTYSession, error) {
 	return newPTYSession(id, name, command, nil)
 }
 
-func NewPTYSessionWithLog(id, name, command string, logFile *os.File) (*PTYSession, error) {
+func NewPTYSessionWithLog(id, name, command string, logFile io.WriteCloser) (*PTYSession, error) {
 	return newPTYSession(id, name, command, logFile)
 }
 
-func newPTYSession(id, name, command string, logFile *os.File) (*PTYSession, error) {
+func newPTYSession(id, name, command string, logFile io.WriteCloser) (*PTYSession, error) {
 	if command == "" {
 		command = "/bin/bash"
 	}

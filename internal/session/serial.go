@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,7 +21,7 @@ type SerialSession struct {
 	port      serial.Port
 	buf       *buffer.RingBuffer
 	writer    io.Writer
-	logFile   *os.File
+	logFile   io.WriteCloser
 	alive     atomic.Bool
 	done      chan struct{}
 	readDone  chan struct{} // closed when readLoop exits
@@ -40,7 +39,7 @@ func NewSerialSession(device string, baudRate int) (*SerialSession, error) {
 	return NewSerialSessionWithLog(device, baudRate, nil)
 }
 
-func NewSerialSessionWithLog(device string, baudRate int, logFile *os.File) (*SerialSession, error) {
+func NewSerialSessionWithLog(device string, baudRate int, logFile io.WriteCloser) (*SerialSession, error) {
 	if !isValidSerialDevice(device) {
 		return nil, fmt.Errorf("invalid serial device %q: must start with /dev/tty or /dev/cu. (e.g. /dev/ttyUSB0, /dev/cu.usbserial-XXXX)", device)
 	}

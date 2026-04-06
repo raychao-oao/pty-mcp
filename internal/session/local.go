@@ -3,7 +3,7 @@ package session
 
 import (
 	"context"
-	"os"
+	"io"
 
 	"github.com/raychao-oao/pty-mcp/internal/aitx"
 	"github.com/raychao-oao/pty-mcp/internal/buffer"
@@ -19,7 +19,7 @@ func NewLocalSession(command string) (*LocalSession, error) {
 	return NewLocalSessionWithLog(command, nil)
 }
 
-func NewLocalSessionWithLog(command string, logFile *os.File) (*LocalSession, error) {
+func NewLocalSessionWithLog(command string, logFile io.WriteCloser) (*LocalSession, error) {
 	id := NewID()
 	pty, err := aitx.NewPTYSessionWithLog(id, command, command, logFile)
 	if err != nil {

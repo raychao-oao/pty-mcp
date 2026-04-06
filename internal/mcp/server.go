@@ -50,7 +50,9 @@ var toolsList = []map[string]any{
 			"persistent": map[string]any{"type": "boolean", "description": "Use ai-tmux for persistent session (survives SSH disconnect)"},
 			"command":    map[string]any{"type": "string", "description": "Initial command for persistent session (default: /bin/bash)"},
 			"session_id": map[string]any{"type": "string", "description": "Attach to existing ai-tmux session by ID (use list_remote_sessions to find IDs)"},
-			"log_file":   map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size (e.g. long-running scripts). File is created if it doesn't exist."},
+			"log_file":      map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size (e.g. long-running scripts). File is created if it doesn't exist."},
+			"log_max_size":  map[string]any{"type": "integer", "description": "Max log file size in MB before rotation (0 = no rotation, default: 0)"},
+			"log_max_files": map[string]any{"type": "integer", "description": "Max number of rotated log files to keep (default: 3)"},
 		},
 		"required": []string{"host", "user"},
 	}},
@@ -58,7 +60,9 @@ var toolsList = []map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"command":  map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
-			"log_file": map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size. File is created if it doesn't exist."},
+			"log_file":      map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size. File is created if it doesn't exist."},
+			"log_max_size":  map[string]any{"type": "integer", "description": "Max log file size in MB before rotation (0 = no rotation, default: 0)"},
+			"log_max_files": map[string]any{"type": "integer", "description": "Max number of rotated log files to keep (default: 3)"},
 		},
 	}},
 	{"name": "create_serial_session", "description": "Open a serial port session. Device path must start with /dev/tty or /dev/cu. (e.g. /dev/ttyUSB0, /dev/cu.usbserial-XXXX)", "inputSchema": map[string]any{
@@ -66,17 +70,21 @@ var toolsList = []map[string]any{
 		"properties": map[string]any{
 			"device":    map[string]any{"type": "string", "description": "Serial device path (must start with /dev/tty or /dev/cu.)"},
 			"baud_rate": map[string]any{"type": "integer", "description": "Baud rate (default: 9600)"},
-			"log_file":  map[string]any{"type": "string", "description": "File path to append all session output. File is created if it doesn't exist."},
+			"log_file":      map[string]any{"type": "string", "description": "File path to append all session output. File is created if it doesn't exist."},
+			"log_max_size":  map[string]any{"type": "integer", "description": "Max log file size in MB before rotation (0 = no rotation, default: 0)"},
+			"log_max_files": map[string]any{"type": "integer", "description": "Max number of rotated log files to keep (default: 3)"},
 		},
 		"required": []string{"device"},
 	}},
-	{"name": "send_input", "description": "Send input and wait for output to settle. Returns cursor_start/cursor_end for command boundary tracking, and is_complete (false = timeout, use read_output for remaining output).", "inputSchema": map[string]any{
+	{"name": "send_input", "description": "Send input and wait for output to settle. Returns cursor_start/cursor_end for command boundary tracking, and is_complete (false = timeout, use read_output for remaining output). If wait_for is set, blocks until the pattern matches (combines send_input + read_output wait_for in one call).", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"session_id": map[string]any{"type": "string"},
-			"input":      map[string]any{"type": "string"},
-			"timeout_ms": map[string]any{"type": "integer", "description": "Max wait time in ms (default: 5000, max: 30000)"},
-			"raw":        map[string]any{"type": "boolean", "description": "If true, send input exactly as-is without appending a newline. Use for interactive menus and single-character inputs (e.g. menu selections, y/n prompts). Follow with send_control('enter') when ready to submit."},
+			"session_id":       map[string]any{"type": "string"},
+			"input":            map[string]any{"type": "string"},
+			"timeout_ms":       map[string]any{"type": "integer", "description": "Max wait time in ms (default: 5000, max: 30000)"},
+			"raw":              map[string]any{"type": "boolean", "description": "If true, send input exactly as-is without appending a newline. Use for interactive menus and single-character inputs (e.g. menu selections, y/n prompts). Follow with send_control('enter') when ready to submit."},
+			"wait_for":         map[string]any{"type": "string", "description": "Regex pattern to wait for after sending input. Combines send_input + read_output(wait_for=...) into one tool call."},
+			"wait_for_timeout": map[string]any{"type": "number", "description": "Timeout in seconds for wait_for (default: 10, max: 600)"},
 		},
 		"required": []string{"session_id", "input"},
 	}},
@@ -114,7 +122,7 @@ var toolsList = []map[string]any{
 		"required": []string{"session_id"},
 	}},
 	{"name": "list_sessions", "description": "List all active sessions", "inputSchema": map[string]any{"type": "object"}},
-	{"name": "list_remote_sessions", "description": "List persistent sessions on a remote ai-tmux server (use session_id to reattach)", "inputSchema": map[string]any{
+	{"name": "list_remote_sessions", "description": "List persistent sessions on a remote ai-tmux server (use session_id to reattach). Optionally filter by status.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"host":            map[string]any{"type": "string", "description": "SSH host IP or hostname"},
@@ -123,6 +131,7 @@ var toolsList = []map[string]any{
 			"password":        map[string]any{"type": "string", "description": "Optional if using key auth"},
 			"key_path":        map[string]any{"type": "string", "description": "SSH private key path"},
 			"ignore_host_key": map[string]any{"type": "boolean"},
+			"status":          map[string]any{"type": "string", "description": "Filter by session status (e.g. 'running', 'idle')"},
 		},
 		"required": []string{"host", "user"},
 	}},
@@ -175,7 +184,7 @@ func handle(h *Handler, req *request) response {
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.6.0"},
+			"serverInfo":      map[string]any{"name": "pty-mcp", "version": "0.7.0"},
 		}}
 	case "tools/list":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": toolsList}}
