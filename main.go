@@ -101,27 +101,27 @@ func main() {
 // CLI flags take priority; if --audit-url is not set, the config file is used.
 func resolveAuditConfig(flagURL, flagUser, flagMode string) (*config.Audit, error) {
 	if flagURL != "" {
-		// CLI flags provided — use them directly (token from env var or config file).
+		// --audit-url provided: use config file as base, override with any explicit flags.
 		fileCfg, _ := config.LoadAudit()
-		token := ""
+		token, cfgUser, cfgMode := "", "", ""
 		if fileCfg != nil {
-			token = fileCfg.Token
+			token, cfgUser, cfgMode = fileCfg.Token, fileCfg.User, fileCfg.Mode
 		}
 		if env := os.Getenv("PTY_MCP_AUDIT_TOKEN"); env != "" {
-			token = env // env var overrides file token
+			token = env
 		}
-		mode := flagMode
-		if mode == "" {
-			mode = "best-effort"
+		if flagUser != "" {
+			cfgUser = flagUser
 		}
-		return &config.Audit{
-			URL:   flagURL,
-			User:  flagUser,
-			Mode:  mode,
-			Token: token,
-		}, nil
+		if flagMode != "" {
+			cfgMode = flagMode
+		}
+		if cfgMode == "" {
+			cfgMode = "best-effort"
+		}
+		return &config.Audit{URL: flagURL, User: cfgUser, Mode: cfgMode, Token: token}, nil
 	}
-	// No CLI flag — try config file.
+	// No CLI flag — use config file entirely.
 	return config.LoadAudit()
 }
 
