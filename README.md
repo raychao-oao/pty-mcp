@@ -69,6 +69,7 @@ detach_session()          → close Claude Code, task continues
 | **Settle detection** | Waits for output to settle before returning (smart timeout) |
 | **Pattern matching** | `wait_for` blocks until a regex pattern appears in output (v0.2.0) |
 | **Bounded memory** | Ring buffer prevents OOM on long-running sessions (v0.2.0) |
+| **Audit log** | Optional voluntary operation log — record `send_input` commands to a collector for review and traceability (v0.8.0) |
 
 ## Architecture
 
@@ -256,6 +257,65 @@ send_input(session_id, "echo $?")         → check build result
 | `list_remote_sessions` | List persistent sessions on a remote host |
 
 > ¹ **`send_secret` platform support**: macOS uses a native password dialog (osascript). WSL2 uses `powershell.exe Get-Credential` (Windows GUI dialog). Linux with a display server uses `zenity` or `kdialog`. Headless Linux falls back to `/dev/tty`.
+
+## Audit Log
+
+pty-mcp includes an optional audit log feature that records every `send_input` command to a central collector. This lets teams review and trace what AI agents did during a session.
+
+> **Important:** This is a **voluntary, self-reporting** operation log. It relies on operators choosing to enable it and run the collector. Because pty-mcp runs on the operator's own machine, there is no technical mechanism to enforce logging — a non-compliant operator could simply run pty-mcp without audit enabled. This feature provides traceability for teams that *want* it, but **it is not a substitute for system-level audit tools** (e.g., auditd, syslog forwarding, SSH session recording) in environments where audit compliance is required.
+
+### What it records
+
+- Timestamp, operator identity, session ID, session type (local/ssh/serial), target host
+- The exact input sent via `send_input` (including `raw=true` inputs like menu selections)
+- Output snippet (first 2 KB) after each command
+- A `cmd_id` linking the command to its output
+
+`send_secret` is **never logged** — secrets entered via the GUI dialog do not appear in the audit log.
+
+### Setup
+
+**Start the collector** (on any host reachable by operators):
+
+```bash
+# Generate a shared token
+openssl rand -hex 32 > ~/.config/pty-mcp/token
+chmod 600 ~/.config/pty-mcp/token
+
+PTY_MCP_AUDIT_TOKEN=$(cat ~/.config/pty-mcp/token) \
+  pty-mcp audit serve --port 9099 --log /var/log/pty-mcp-audit.jsonl
+```
+
+**Configure each operator** (`~/.config/pty-mcp/config`, chmod 600):
+
+```ini
+# pty-mcp audit configuration
+audit-url=http://audit-host:9099
+audit-user=ray
+audit-mode=best-effort
+audit-token=<shared-token>
+```
+
+Operators without a config file are unaffected — audit is opt-in and off by default.
+
+### Audit modes
+
+| Mode | Behaviour |
+|------|-----------|
+| `best-effort` (default) | Commands execute regardless of whether the log was written; entries are queued and retried in the background |
+| `strict` | `send_input` is rejected if the audit entry cannot be delivered; use when logging is a team policy requirement |
+
+### Reviewing logs
+
+Logs are stored as JSONL (one JSON object per line), readable with standard tools:
+
+```bash
+# All commands by operator ray
+grep '"user":"ray"' /var/log/pty-mcp-audit.jsonl | jq .
+
+# Commands sent to a specific host
+jq 'select(.target == "root@prod01")' /var/log/pty-mcp-audit.jsonl
+```
 
 ## ai-tmux: Persistent Terminal Daemon
 
