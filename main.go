@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 
 	"github.com/raychao-oao/pty-mcp/internal/audit"
 	"github.com/raychao-oao/pty-mcp/internal/config"
@@ -126,6 +129,8 @@ func runAudit(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage:")
 		fmt.Fprintln(os.Stderr, "  pty-mcp audit init             Create config file and generate token")
+		fmt.Fprintln(os.Stderr, "  pty-mcp audit enable           Enable audit (init if needed)")
+		fmt.Fprintln(os.Stderr, "  pty-mcp audit disable          Disable audit (keeps config and token)")
 		fmt.Fprintln(os.Stderr, "  pty-mcp audit serve --port PORT --log FILE  Run audit log collector")
 		os.Exit(1)
 	}
@@ -133,6 +138,10 @@ func runAudit(args []string) {
 	switch args[0] {
 	case "init":
 		runAuditInit(args[1:])
+	case "enable":
+		runAuditEnable()
+	case "disable":
+		runAuditDisable()
 	case "serve":
 		runAuditServe(args[1:])
 	default:
@@ -206,6 +215,101 @@ func runAuditInit(args []string) {
 	fmt.Printf("       PTY_MCP_AUDIT_TOKEN=%s \\\n", token)
 	fmt.Printf("         pty-mcp audit serve --port 9099 --log /var/log/pty-mcp-audit.jsonl\n\n")
 	fmt.Printf("Restart Claude Code to apply the new config.\n")
+}
+
+func runAuditEnable() {
+	cfgPath := config.PrimaryPath()
+	if cfgPath == "" {
+		log.Fatal("audit enable: cannot determine config directory")
+	}
+
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		fmt.Println("No config found — running audit init first...")
+		fmt.Println()
+		runAuditInit([]string{})
+		fmt.Println()
+		fmt.Printf("Edit audit-url in %s then run 'pty-mcp audit enable' again.\n", cfgPath)
+		return
+	}
+
+	changed, placeholder, err := toggleAuditURL(cfgPath, true)
+	if err != nil {
+		log.Fatalf("audit enable: %v", err)
+	}
+	if !changed {
+		fmt.Println("Audit is already enabled (audit-url is set).")
+		return
+	}
+	if placeholder {
+		fmt.Printf("Warning: audit-url still contains the placeholder URL.\n")
+		fmt.Printf("Edit %s and set the real collector URL.\n\n", cfgPath)
+	}
+	fmt.Println("Audit enabled. Restart Claude Code to apply.")
+}
+
+func runAuditDisable() {
+	cfgPath := config.PrimaryPath()
+	if cfgPath == "" {
+		log.Fatal("audit disable: cannot determine config directory")
+	}
+
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		fmt.Println("No config found — audit is not configured.")
+		return
+	}
+
+	changed, _, err := toggleAuditURL(cfgPath, false)
+	if err != nil {
+		log.Fatalf("audit disable: %v", err)
+	}
+	if !changed {
+		fmt.Println("Audit is already disabled (audit-url is commented out).")
+		return
+	}
+	fmt.Println("Audit disabled. Restart Claude Code to apply.")
+}
+
+// toggleAuditURL comments or uncomments the audit-url line in the config file.
+// Returns (changed, isPlaceholder, error).
+func toggleAuditURL(path string, enable bool) (bool, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, false, err
+	}
+
+	var out bytes.Buffer
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	changed := false
+	placeholder := false
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !changed {
+			if enable && (strings.HasPrefix(line, "# audit-url=") || strings.HasPrefix(line, "#audit-url=")) {
+				// Uncomment: strip leading "# " or "#"
+				uncommented := strings.TrimPrefix(line, "# ")
+				uncommented = strings.TrimPrefix(uncommented, "#")
+				fmt.Fprintln(&out, uncommented)
+				placeholder = strings.Contains(uncommented, "your-collector")
+				changed = true
+				continue
+			}
+			if !enable && strings.HasPrefix(line, "audit-url=") {
+				// Comment out
+				fmt.Fprintln(&out, "# "+line)
+				changed = true
+				continue
+			}
+		}
+		fmt.Fprintln(&out, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return false, false, err
+	}
+	if !changed {
+		return false, false, nil
+	}
+	return true, placeholder, os.WriteFile(path, out.Bytes(), 0600)
 }
 
 func runAuditServe(args []string) {

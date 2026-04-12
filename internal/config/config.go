@@ -56,6 +56,13 @@ func LoadAudit() (*Audit, error) {
 	}, nil
 }
 
+// PrimaryPath returns the primary config file path (~/.config/pty-mcp/config).
+// Returns an empty string if the home directory cannot be determined.
+func PrimaryPath() string {
+	p, _, _ := configPaths()
+	return p
+}
+
 // configPaths returns (primary, legacy) config file paths.
 func configPaths() (string, string, error) {
 	home, err := os.UserHomeDir()
