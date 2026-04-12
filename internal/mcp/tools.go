@@ -19,6 +19,7 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"golang.org/x/term"
 
+	"github.com/raychao-oao/pty-mcp/internal/audit"
 	"github.com/raychao-oao/pty-mcp/internal/buffer"
 	"github.com/raychao-oao/pty-mcp/internal/pty"
 	"github.com/raychao-oao/pty-mcp/internal/session"
@@ -45,11 +46,12 @@ func UnmarshalMcpArgs(data json.RawMessage, target any) error {
 }
 
 type Handler struct {
-	mgr *session.Manager
+	mgr   *session.Manager
+	audit *audit.Client // nil if audit is not configured
 }
 
-func NewHandler(mgr *session.Manager) *Handler {
-	return &Handler{mgr: mgr}
+func NewHandler(mgr *session.Manager, auditClient *audit.Client) *Handler {
+	return &Handler{mgr: mgr, audit: auditClient}
 }
 
 type CreateSSHParams struct {
@@ -239,12 +241,44 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Audit phase 1: record command before execution.
+	// auditOutput is set by each code path below; the deferred closure sends phase 2.
+	var auditCmdID string
+	var auditOutput string
+	if h.audit != nil {
+		info := h.mgr.GetInfo(p.SessionID)
+		auditCmdID = audit.NewCmdID()
+		if err := h.audit.SendCmd(audit.CmdEntry{
+			CmdID:     auditCmdID,
+			TS:        time.Now().UTC().Format(time.RFC3339Nano),
+			User:      h.audit.User(),
+			SessionID: p.SessionID,
+			Type:      s.Type(),
+			Target:    info.Target,
+			Cmd:       p.Input,
+			Raw:       p.Raw,
+		}); err != nil {
+			return nil, fmt.Errorf("audit: %w", err)
+		}
+		// Audit phase 2: send output snippet after execution (always best-effort).
+		defer func() {
+			go h.audit.SendOutput(audit.OutputEntry{
+				CmdID:         auditCmdID,
+				TS:            time.Now().UTC().Format(time.RFC3339Nano),
+				OutputSnippet: audit.Snippet(auditOutput, 2048),
+				OutputBytes:   len(auditOutput),
+			})
+		}()
+	}
+
 	// RemoteSession: pass timeout_ms to ai-tmux server's send_input
 	if rs, ok := s.(*session.RemoteSession); ok {
 		if err := rs.WriteWithTimeout(p.Input, p.TimeoutMs); err != nil {
 			return nil, err
 		}
 		output, isComplete := rs.ReadScreen(p.TimeoutMs)
+		auditOutput = output
 		return map[string]any{"output": output, "cursor": rs.Buffer().Snapshot(), "is_alive": rs.IsAlive(), "is_complete": isComplete}, nil
 	}
 	cursorStart := s.Buffer().Snapshot()
@@ -282,10 +316,12 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 			s.Buffer().Mark()
 		}
 		result.Cursor = s.Buffer().Snapshot()
+		auditOutput = result.MatchLine
 		return result, nil
 	}
 
 	output, isComplete := s.ReadScreen(p.TimeoutMs)
+	auditOutput = output
 	cursorEnd := s.Buffer().Snapshot()
 	return map[string]any{
 		"output":       output,
