@@ -275,28 +275,36 @@ pty-mcp includes an optional audit log feature that records every `send_input` c
 
 ### Setup
 
-**Start the collector** (on any host reachable by operators):
+**Each operator runs once** to create their config and generate a token:
 
 ```bash
-# Generate a shared token
-openssl rand -hex 32 > ~/.config/pty-mcp/token
-chmod 600 ~/.config/pty-mcp/token
+pty-mcp audit init
+```
 
-PTY_MCP_AUDIT_TOKEN=$(cat ~/.config/pty-mcp/token) \
+This creates `~/.config/pty-mcp/config` (chmod 600) with a randomly generated token and prints the token to share with the collector admin.
+
+**The collector admin** starts the server (using the token from init output):
+
+```bash
+PTY_MCP_AUDIT_TOKEN=<token-from-init> \
   pty-mcp audit serve --port 9099 --log /var/log/pty-mcp-audit.jsonl
 ```
 
-**Configure each operator** (`~/.config/pty-mcp/config`, chmod 600):
+**Enable audit** after setting the collector URL in the config:
 
-```ini
-# pty-mcp audit configuration
-audit-url=http://audit-host:9099
-audit-user=ray
-audit-mode=best-effort
-audit-token=<shared-token>
+```bash
+# Edit config and set: audit-url=http://your-collector:9099
+pty-mcp audit enable
+# Restart Claude Code to apply
 ```
 
-Operators without a config file are unaffected — audit is opt-in and off by default.
+To temporarily stop logging without losing your config:
+
+```bash
+pty-mcp audit disable
+```
+
+Operators without a config file are unaffected — audit is off by default.
 
 ### Audit modes
 
