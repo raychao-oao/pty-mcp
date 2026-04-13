@@ -372,6 +372,10 @@ create_ssh_session(host: "myserver", user: "admin")
 - For serial: appropriate device permissions
 - For persistent sessions: `ai-tmux` binary on remote server
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
+
 ## License
 
 MIT
