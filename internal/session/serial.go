@@ -113,7 +113,7 @@ func (s *SerialSession) Write(input string) error {
 		return fmt.Errorf("session is not alive")
 	}
 	s.buf.Mark()
-	_, err := s.port.Write([]byte(input + "\r\n"))
+	_, err := s.port.Write([]byte(input + "\r"))
 	return err
 }
 

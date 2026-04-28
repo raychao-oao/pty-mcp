@@ -38,18 +38,21 @@ const maxSessions = 50
 
 // Manager manages the lifecycle of all sessions
 type Manager struct {
-	mu          sync.RWMutex
-	sessions    map[string]Session
-	infos       map[string]Info
-	idleTimeout time.Duration
+	mu             sync.RWMutex
+	sessions       map[string]Session
+	infos          map[string]Info
+	idleTimeout    time.Duration
+	secretMu       sync.Mutex
+	pendingSecrets map[string]PendingSecret
 }
 
 // NewManager creates a SessionManager; idleSeconds is the idle timeout in seconds (0 means no timeout)
 func NewManager(idleSeconds int) *Manager {
 	m := &Manager{
-		sessions:    make(map[string]Session),
-		infos:       make(map[string]Info),
-		idleTimeout: time.Duration(idleSeconds) * time.Second,
+		sessions:       make(map[string]Session),
+		infos:          make(map[string]Info),
+		idleTimeout:    time.Duration(idleSeconds) * time.Second,
+		pendingSecrets: make(map[string]PendingSecret),
 	}
 	if idleSeconds > 0 {
 		go m.idleReaper()
@@ -168,6 +171,7 @@ func (m *Manager) Close(id string) error {
 	delete(m.infos, id)
 	m.mu.Unlock()
 
+	m.clearSecret(id)
 	return s.Close()
 }
 
@@ -183,11 +187,44 @@ func (m *Manager) Detach(id string) error {
 	delete(m.infos, id)
 	m.mu.Unlock()
 
+	m.clearSecret(id)
+
 	if rs, ok := s.(*RemoteSession); ok {
 		return rs.Detach()
 	}
 	// non-remote sessions cannot be detached, close directly
 	return s.Close()
+}
+
+// PendingSecret holds a pre-staged secret and its line ending.
+type PendingSecret struct {
+	Secret     []byte
+	LineEnding string
+}
+
+// SetPendingSecret stores a secret for automatic delivery when a password prompt is detected.
+func (m *Manager) SetPendingSecret(id string, ps PendingSecret) {
+	m.secretMu.Lock()
+	defer m.secretMu.Unlock()
+	m.pendingSecrets[id] = ps
+}
+
+// TakeSecret returns and removes the pending secret for a session, or nil if none.
+func (m *Manager) TakeSecret(id string) *PendingSecret {
+	m.secretMu.Lock()
+	defer m.secretMu.Unlock()
+	ps, ok := m.pendingSecrets[id]
+	if !ok {
+		return nil
+	}
+	delete(m.pendingSecrets, id)
+	return &ps
+}
+
+func (m *Manager) clearSecret(id string) {
+	m.secretMu.Lock()
+	defer m.secretMu.Unlock()
+	delete(m.pendingSecrets, id)
 }
 
 func NewID() string {

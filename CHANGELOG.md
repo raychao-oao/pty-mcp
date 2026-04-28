@@ -2,6 +2,17 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.9.0] - 2026-04-28
+
+### Added
+- `prepare_secret` tool — pre-stage a secret before a password prompt appears; stored in session buffer and automatically sent when a password prompt is detected (no agent round-trip needed)
+- `line_ending` param on `prepare_secret` — agent specifies the line ending to append (`\r` default, `\r\n`, `\n`); handles device-specific requirements without hardcoding
+- Settle detection before auto-sending buffered secret — waits up to 2s for output to stabilize so the device has switched to no-echo mode before the secret is sent
+- `send_secret` now checks for a buffered secret first (from `prepare_secret`) before showing a GUI dialog
+
+### Fixed
+- Serial session `Write` now appends `\r` instead of `\r\n` — prevents stray `\n` from being interpreted as an empty password submission on serial console devices
+
 ## [v0.8.0] - 2026-04-13
 
 ### Added

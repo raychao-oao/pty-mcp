@@ -314,6 +314,7 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 		// Only advance mark on match; on timeout, leave output available for follow-up read_output
 		if result.Matched {
 			s.Buffer().Mark()
+			h.maybeAutoSendSecret(s, result.MatchLine)
 		}
 		result.Cursor = s.Buffer().Snapshot()
 		auditOutput = result.MatchLine
@@ -321,6 +322,7 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	}
 
 	output, isComplete := s.ReadScreen(p.TimeoutMs)
+	h.maybeAutoSendSecret(s, output)
 	auditOutput = output
 	cursorEnd := s.Buffer().Snapshot()
 	return map[string]any{
@@ -708,6 +710,7 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 		// Only advance mark on match; on timeout, leave output available for follow-up reads
 		if result.Matched {
 			s.Buffer().Mark()
+			h.maybeAutoSendSecret(s, result.MatchLine)
 		}
 		result.Cursor = s.Buffer().Snapshot()
 		return result, nil
@@ -851,6 +854,74 @@ func (h *Handler) DetachSession(params json.RawMessage) (any, error) {
 	return map[string]bool{"success": true}, nil
 }
 
+// maybeAutoSendSecret checks if the session has a pending secret and the output
+// indicates a password prompt. If so, sends the secret immediately and returns true.
+// If output is not a password prompt, the secret is restored for a later call.
+// waitForSettle polls the ring buffer until no new data arrives for settleMs,
+// or until maxWaitMs elapses. Used before auto-sending a secret to ensure the
+// device has finished writing output (e.g. switched to no-echo mode).
+func waitForSettle(rb *buffer.RingBuffer, settleMs, maxWaitMs int) {
+	deadline := time.Now().Add(time.Duration(maxWaitMs) * time.Millisecond)
+	settle := time.Duration(settleMs) * time.Millisecond
+	last := rb.Snapshot()
+	lastChange := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		cur := rb.Snapshot()
+		if cur != last {
+			last = cur
+			lastChange = time.Now()
+		} else if time.Since(lastChange) >= settle {
+			return
+		}
+	}
+}
+
+func (h *Handler) maybeAutoSendSecret(s session.Session, output string) bool {
+	ps := h.mgr.TakeSecret(s.ID())
+	if ps == nil {
+		return false
+	}
+	cls := session.ClassifyOutput(output)
+	if cls.State == "password_prompt" {
+		waitForSettle(s.Buffer(), 100, 2000)
+		s.WriteRaw(string(ps.Secret) + ps.LineEnding) //nolint:errcheck
+		return true
+	}
+	h.mgr.SetPendingSecret(s.ID(), *ps)
+	return false
+}
+
+type PrepareSecretParams struct {
+	SessionID  string `json:"session_id"`
+	Prompt     string `json:"prompt"`
+	LineEnding string `json:"line_ending"`
+}
+
+func (h *Handler) PrepareSecret(params json.RawMessage) (any, error) {
+	var p PrepareSecretParams
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
+		return nil, err
+	}
+	if _, err := h.mgr.Get(p.SessionID); err != nil {
+		return nil, err
+	}
+	prompt := p.Prompt
+	if prompt == "" {
+		prompt = "Enter secret: "
+	}
+	lineEnding := p.LineEnding
+	if lineEnding == "" {
+		lineEnding = "\r"
+	}
+	secret, err := readSecretFromUser(prompt)
+	if err != nil {
+		return nil, err
+	}
+	h.mgr.SetPendingSecret(p.SessionID, session.PendingSecret{Secret: secret, LineEnding: lineEnding})
+	return map[string]any{"success": true, "buffered": true}, nil
+}
+
 type SendSecretParams struct {
 	SessionID string `json:"session_id"`
 	Prompt    string `json:"prompt"`
@@ -864,6 +935,14 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 	s, err := h.mgr.Get(p.SessionID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Use buffered secret if available (pre-staged via prepare_secret)
+	if ps := h.mgr.TakeSecret(p.SessionID); ps != nil {
+		if err := s.WriteRaw(string(ps.Secret) + ps.LineEnding); err != nil {
+			return nil, fmt.Errorf("write to session: %w", err)
+		}
+		return map[string]any{"success": true}, nil
 	}
 
 	prompt := p.Prompt

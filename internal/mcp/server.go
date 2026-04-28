@@ -101,7 +101,16 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id"},
 	}},
-	{"name": "send_secret", "description": "Prompt the human user to type a secret (password/passphrase) directly into a GUI dialog. The value is sent to the PTY session without ever appearing in AI context or logs. IMPORTANT: only call this when the session is actively waiting for a password input (echo is off) — e.g. an SSH/sudo/getpass prompt. Do NOT call this on an idle shell prompt.", "inputSchema": map[string]any{
+	{"name": "prepare_secret", "description": "Pre-stage a secret (password/passphrase) for a session. Shows a GUI dialog NOW so the operator can enter the secret before a password prompt appears. The secret is stored in a buffer and automatically sent when a password prompt is detected — no further agent action needed. Use this before connecting to devices with short password timeouts (e.g. serial console). The buffered secret is never logged.", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"session_id":  map[string]any{"type": "string"},
+			"prompt":      map[string]any{"type": "string", "description": "Prompt shown to the user (default: \"Enter secret: \")"},
+			"line_ending": map[string]any{"type": "string", "description": "Line ending appended after the secret (default: \"\\r\"). Use \"\\r\\n\" for serial consoles that require CR+LF, \"\\n\" for Linux terminals."},
+		},
+		"required": []string{"session_id"},
+	}},
+	{"name": "send_secret", "description": "Prompt the human user to type a secret (password/passphrase) directly into a GUI dialog. The value is sent to the PTY session without ever appearing in AI context or logs. IMPORTANT: only call this when the session is actively waiting for a password input (echo is off) — e.g. an SSH/sudo/getpass prompt. Do NOT call this on an idle shell prompt. If prepare_secret was called earlier for this session, uses the buffered secret without showing a dialog.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"session_id": map[string]any{"type": "string"},
@@ -217,6 +226,8 @@ func handleToolCall(h *Handler, req *request) response {
 		result, err = h.SendInput(p.Arguments)
 	case "read_output":
 		result, err = h.ReadOutput(p.Arguments)
+	case "prepare_secret":
+		result, err = h.PrepareSecret(p.Arguments)
 	case "send_secret":
 		result, err = h.SendSecret(p.Arguments)
 	case "send_control":
