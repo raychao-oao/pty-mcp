@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +42,11 @@ func NewPTYSessionWithLog(id, name, command string, logFile io.WriteCloser) (*PT
 	return newPTYSession(id, name, command, logFile)
 }
 
+func isPowerShell(command string) bool {
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(command), ".exe"))
+	return base == "pwsh" || base == "powershell"
+}
+
 func newPTYSession(id, name, command string, logFile io.WriteCloser) (*PTYSession, error) {
 	if command == "" {
 		command = "/bin/bash"
@@ -49,7 +56,13 @@ func newPTYSession(id, name, command string, logFile io.WriteCloser) (*PTYSessio
 	}
 
 	cmd := exec.Command(command)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	term := "xterm-256color"
+	// PSReadLine uses escape sequences that conflict with pty-mcp's raw input model.
+	// TERM=dumb disables PSReadLine's fancy line editing, fixing garbled output for $vars.
+	if isPowerShell(command) {
+		term = "dumb"
+	}
+	cmd.Env = append(os.Environ(), "TERM="+term)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
