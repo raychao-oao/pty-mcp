@@ -2,6 +2,7 @@
 package aitx
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -55,14 +56,30 @@ func newPTYSession(id, name, command string, logFile io.WriteCloser) (*PTYSessio
 		name = command
 	}
 
-	cmd := exec.Command(command)
-	term := "xterm-256color"
-	// PSReadLine uses escape sequences that conflict with pty-mcp's raw input model.
-	// TERM=dumb disables PSReadLine's fancy line editing, fixing garbled output for $vars.
+	var cmd *exec.Cmd
 	if isPowerShell(command) {
-		term = "dumb"
+		// -NoLogo -NoProfile: skip startup banner and user profile scripts.
+		// Profile scripts are the primary source of PSReadLine, oh-my-posh, and OSC 133/633
+		// shell-integration hooks that inject garbage escape sequences into the PTY buffer.
+		// Interactive features (Read-Host, browser OAuth) still work without a profile.
+		cmd = exec.Command(command, "-NoLogo", "-NoProfile")
+		// TERM=dumb + NO_COLOR stop .NET/PSStyle from emitting color/cursor sequences.
+		// DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_CONTROL_CODES=0 stops the \x1b[6n DSR probe that
+		// causes the outer terminal to write cursor-position replies into the PTY stdin.
+		// TERM_PROGRAM= (empty) prevents profile integrations that key off Apple_Terminal/vscode.
+		// CLICOLOR=0 disables BSD-style color for native tools called from pwsh.
+		cmd.Env = append(os.Environ(),
+			"TERM=dumb",
+			"NO_COLOR=1",
+			"CLICOLOR=0",
+			"TERM_PROGRAM=",
+			"DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_CONTROL_CODES=0",
+			"VSCODE_SHELL_INTEGRATION=0",
+		)
+	} else {
+		cmd = exec.Command(command)
+		cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	}
-	cmd.Env = append(os.Environ(), "TERM="+term)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -93,6 +110,16 @@ func newPTYSession(id, name, command string, logFile io.WriteCloser) (*PTYSessio
 	s.alive.Store(true)
 	s.lastUsed.Store(time.Now())
 
+	// dsrQuery is sent by PSReadLine / .NET Console before each readline to learn
+	// the cursor position. Our Go process never displays anything, so the outer
+	// terminal's response never reaches the PTY. With no answer, PSReadLine
+	// computes garbage cursor offsets and produces corrupted VT sequences.
+	// We intercept the query and reply with row=1,col=1 so PSReadLine renders cleanly.
+	var (
+		dsrQuery    = []byte("\x1b[6n")
+		dsrResponse = []byte("\x1b[1;1R")
+	)
+
 	// read PTY output in background
 	go func() {
 		defer close(s.readDone)
@@ -100,7 +127,14 @@ func newPTYSession(id, name, command string, logFile io.WriteCloser) (*PTYSessio
 		for {
 			n, err := ptmx.Read(tmp)
 			if n > 0 {
-				s.writer.Write(tmp[:n])
+				chunk := tmp[:n]
+				if bytes.Contains(chunk, dsrQuery) {
+					ptmx.Write(dsrResponse)
+					chunk = bytes.ReplaceAll(chunk, dsrQuery, nil)
+				}
+				if len(chunk) > 0 {
+					s.writer.Write(chunk)
+				}
 			}
 			if err != nil {
 				if err != io.EOF {
@@ -122,6 +156,30 @@ func newPTYSession(id, name, command string, logFile io.WriteCloser) (*PTYSessio
 	ptyhelper.WaitForSettle(func() string {
 		return s.buf.String()
 	}, 300*time.Millisecond, 2*time.Second)
+
+	// Silence PSReadLine and PSStyle escape sequences.
+	// Remove-Module PSReadLine: PSReadLine does character-by-character line editing using VT
+	// sequences, polluting the buffer with redraw noise. The DSR intercept above now gives
+	// .NET Console.ReadLine() valid cursor-position responses, so it works cleanly post-removal.
+	if isPowerShell(command) {
+		inject := []string{
+			// Remove PSReadLine first so subsequent injections use plain Console.ReadLine().
+			"Remove-Module PSReadLine -Force -ErrorAction SilentlyContinue\r",
+			// Force plain-text output rendering (no ANSI color/bold escapes).
+			"$PSStyle.OutputRendering = 'PlainText'\r",
+			// Disable OSC progress indicator and switch to classic (non-VT) progress view.
+			"$PSStyle.Progress.UseOSCIndicator = $false; $PSStyle.Progress.View = 'Classic'\r",
+			// Install a minimal plain-text prompt to prevent OSC 133/633 shell-integration hooks.
+			"function global:prompt { 'PS ' + (Get-Location) + '> ' }\r",
+		}
+		for _, line := range inject {
+			ptmx.WriteString(line)
+			ptyhelper.WaitForSettle(func() string {
+				return s.buf.String()
+			}, 300*time.Millisecond, 3*time.Second)
+		}
+		s.buf.Mark() // advance mark past all startup noise
+	}
 
 	return s, nil
 }
