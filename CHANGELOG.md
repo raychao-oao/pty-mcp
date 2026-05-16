@@ -2,6 +2,15 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.9.1] - 2026-05-16
+
+### Fixed
+- **pwsh PTY encoding corruption on macOS** — commands containing `$true`, `$false`, `~`, or Unicode characters no longer produce `d@@@@: The term ... is not recognized` errors
+  - Root cause: PSReadLine sends `ESC[6n` cursor-position queries; without a response it renders with garbage offsets, producing corrupted sequences that `StripANSI` could not clean
+  - Fix: read goroutine now intercepts `ESC[6n` and replies `ESC[1;1R`; `Remove-Module PSReadLine` is then injected at startup (safe now that DSR responses are in place)
+  - Additional: pwsh launched with `-NoLogo -NoProfile`; added `CLICOLOR=0` and `TERM_PROGRAM=` env vars; `$PSStyle.Progress` OSC indicator disabled; plain-text prompt function installed
+  - `StripANSI` enhanced to handle OSC+ST, DCS, SOS/PM/APC sequences and calls `strings.ToValidUTF8` before regex
+
 ## [v0.9.0] - 2026-04-28
 
 ### Added
