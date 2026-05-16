@@ -7,10 +7,18 @@ import (
 )
 
 var ansiEscape = regexp.MustCompile(
-	`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\r`,
+	`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]` + // CSI sequences
+		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + // OSC terminated by BEL or ST
+		`|\x1bP(?:[^\x1b]|\x1b[^\x5c])*\x1b\\` + // DCS sequences
+		`|\x1b[\x58\x5e\x5f](?:[^\x1b]|\x1b[^\x5c])*\x1b\\` + // SOS/PM/APC sequences
+		`|\x1b[()][AB012]` + // charset designation
+		`|\x1b[\x20-\x2f]*[\x30-\x7e]` + // simple two-byte ESC sequences
+		`|\r` +
+		`|\x{fffd}`, // UTF-8 replacement character from invalid bytes
 )
 
 func StripANSI(s string) string {
+	s = strings.ToValidUTF8(s, "")
 	return ansiEscape.ReplaceAllString(s, "")
 }
 
