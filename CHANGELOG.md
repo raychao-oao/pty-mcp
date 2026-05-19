@@ -2,6 +2,19 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.10.0] - 2026-05-19
+
+### Added
+- **`resize_session` tool** — resize the terminal window for local, SSH, serial, and remote persistent sessions; validated to rows ≤ 500 / cols ≤ 1000 to prevent uint16 wrap-around
+- **Audit log credential redaction** — `send_input` commands and output snippets are scrubbed before being written to the audit log: `password=`, `token=`, `api_key=`, `Authorization: Bearer/Basic/Token` headers, and PEM private key blocks are replaced with `[REDACTED]` / `[PRIVATE KEY REDACTED]`
+- **ai-tmux version check** — `create_ssh_session` (remote mode) now verifies `ai-tmux --version` on the remote host before opening a session; returns a clear error if the binary is missing or below the minimum required version (0.9.0); check fails closed
+- **`send_raw` ai-tmux protocol method** — writes bytes directly to the remote PTY fd without appending `\r`; fixes `raw=true` inputs (`"y"`, `"1"`, single chars) and `send_secret` payloads on remote persistent sessions, which previously double-terminated due to the `send_input` fallback appending an extra `\r`
+
+### Fixed
+- **Remote `wait_for` now works on persistent sessions** — `send_input(wait_for=...)` previously bypassed the regex-match loop for `RemoteSession` and returned immediately; one-line fix ensures the wait_for path is always reached
+- **Remote `send_control` output no longer lost** — `WriteRaw` now caches the `OutputResult` returned by ai-tmux `send_control` (same pattern as `send_input`); `ReadScreen` returns the cached output without an extra round-trip
+- **Remote `raw=true` with non-control input** — `WriteRaw` fell back to `send_input` (which appends `\r`); now routes through `send_raw` for exact byte delivery
+
 ## [v0.9.1] - 2026-05-16
 
 ### Fixed
