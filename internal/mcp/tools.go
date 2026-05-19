@@ -276,8 +276,15 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	// When wait_for is set, fall through to the generic wait_for logic below so
 	// that RemoteSession honours the same regex-match semantics as other session types.
 	if rs, ok := s.(*session.RemoteSession); ok && p.WaitFor == "" {
-		if err := rs.WriteWithTimeout(p.Input, p.TimeoutMs); err != nil {
-			return nil, err
+		if p.Raw {
+			// raw input (control keys) must go through WriteRaw → send_control
+			if err := s.WriteRaw(p.Input); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := rs.WriteWithTimeout(p.Input, p.TimeoutMs); err != nil {
+				return nil, err
+			}
 		}
 		output, isComplete := rs.ReadScreen(p.TimeoutMs)
 		auditOutput = output
