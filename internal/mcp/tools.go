@@ -272,8 +272,10 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 		}()
 	}
 
-	// RemoteSession: pass timeout_ms to ai-tmux server's send_input
-	if rs, ok := s.(*session.RemoteSession); ok {
+	// RemoteSession without wait_for: use specialized WriteWithTimeout path.
+	// When wait_for is set, fall through to the generic wait_for logic below so
+	// that RemoteSession honours the same regex-match semantics as other session types.
+	if rs, ok := s.(*session.RemoteSession); ok && p.WaitFor == "" {
 		if err := rs.WriteWithTimeout(p.Input, p.TimeoutMs); err != nil {
 			return nil, err
 		}

@@ -25,7 +25,12 @@ type Server struct {
 }
 
 func RunServer(socketPath string, idleSeconds int) error {
-	os.Remove(socketPath)
+	if fi, err := os.Lstat(socketPath); err == nil {
+		if fi.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("socket path %s already exists and is not a Unix socket", socketPath)
+		}
+		os.Remove(socketPath)
+	}
 
 	// Set restrictive umask before Listen to prevent TOCTOU race on socket permissions.
 	oldUmask := syscall.Umask(0077)

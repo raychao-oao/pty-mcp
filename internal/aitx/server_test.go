@@ -4,7 +4,7 @@ package aitx_test
 import (
 	"encoding/json"
 	"net"
-	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,22 +12,34 @@ import (
 )
 
 func TestServer_ListEmpty(t *testing.T) {
-	sock := "/tmp/ai-tmux-test.sock"
-	os.Remove(sock)
-	defer os.Remove(sock)
+	sock := filepath.Join(t.TempDir(), "ai-tmux.sock")
 
-	go aitx.RunServer(sock, 300) // 300s idle timeout
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- aitx.RunServer(sock, 300)
+	}()
 
-	// wait for server to start
-	time.Sleep(200 * time.Millisecond)
-
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
+	// Poll until the socket is ready, failing fast if RunServer errors.
+	deadline := time.Now().Add(3 * time.Second)
+	var conn net.Conn
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("RunServer failed to start: %v", err)
+		default:
+		}
+		c, err := net.Dial("unix", sock)
+		if err == nil {
+			conn = c
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if conn == nil {
+		t.Fatal("server did not become ready within 3 s")
 	}
 	defer conn.Close()
 
-	// send list_sessions
 	req := aitx.Request{ID: "t1", Method: "list_sessions"}
 	json.NewEncoder(conn).Encode(req)
 
