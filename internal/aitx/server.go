@@ -25,7 +25,12 @@ type Server struct {
 }
 
 func RunServer(socketPath string, idleSeconds int) error {
-	os.Remove(socketPath)
+	if fi, err := os.Lstat(socketPath); err == nil {
+		if fi.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("socket path %s already exists and is not a Unix socket", socketPath)
+		}
+		os.Remove(socketPath)
+	}
 
 	// Set restrictive umask before Listen to prevent TOCTOU race on socket permissions.
 	oldUmask := syscall.Umask(0077)
@@ -98,6 +103,10 @@ func (srv *Server) handle(req *Request) Response {
 		return srv.listSessions(req)
 	case "close_session":
 		return srv.closeSession(req)
+	case "resize_session":
+		return srv.resizeSession(req)
+	case "send_raw":
+		return srv.sendRaw(req)
 	default:
 		return Response{ID: req.ID, Error: fmt.Sprintf("unknown method: %s", req.Method)}
 	}
@@ -223,6 +232,29 @@ func (srv *Server) sendControl(req *Request) Response {
 	}}
 }
 
+func (srv *Server) sendRaw(req *Request) Response {
+	var p SendRawParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+
+	s, err := srv.getSession(p.SessionID)
+	if err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+
+	if err := s.WriteRaw(p.Data); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+
+	output, isComplete := s.ReadScreen(p.TimeoutMs)
+	return Response{ID: req.ID, Result: OutputResult{
+		Output:     output,
+		IsAlive:    s.IsAlive(),
+		IsComplete: isComplete,
+	}}
+}
+
 func (srv *Server) listSessions(req *Request) Response {
 	srv.mu.RLock()
 	defer srv.mu.RUnlock()
@@ -257,6 +289,27 @@ func (srv *Server) closeSession(req *Request) Response {
 	srv.mu.Unlock()
 
 	s.Close()
+	return Response{ID: req.ID, Result: map[string]bool{"success": true}}
+}
+
+func (srv *Server) resizeSession(req *Request) Response {
+	var p ResizeParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if p.Rows <= 0 || p.Cols <= 0 {
+		return Response{ID: req.ID, Error: "rows and cols must be positive"}
+	}
+	if p.Rows > 500 || p.Cols > 1000 {
+		return Response{ID: req.ID, Error: "rows must be <= 500 and cols must be <= 1000"}
+	}
+	s, err := srv.getSession(p.SessionID)
+	if err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if err := s.Resize(p.Rows, p.Cols); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
 	return Response{ID: req.ID, Result: map[string]bool{"success": true}}
 }
 

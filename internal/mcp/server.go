@@ -154,6 +154,15 @@ var toolsList = []map[string]any{
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
 		"required": []string{"session_id"},
 	}},
+	{"name": "resize_session", "description": "Resize the terminal window (rows x cols) for a session. Affects how TUI tools (top, less, vim, etc.) lay out output. Serial sessions are not supported.", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"rows":       map[string]any{"type": "integer", "description": "Terminal height in rows (e.g. 40)"},
+			"cols":       map[string]any{"type": "integer", "description": "Terminal width in columns (e.g. 220)"},
+		},
+		"required": []string{"session_id", "rows", "cols"},
+	}},
 }
 
 func Serve(h *Handler) {
@@ -242,6 +251,8 @@ func handleToolCall(h *Handler, req *request) response {
 		result, err = h.CloseSession(p.Arguments)
 	case "detach_session":
 		result, err = h.DetachSession(p.Arguments)
+	case "resize_session":
+		result, err = h.ResizeSession(p.Arguments)
 	default:
 		return errResp(req.ID, -32601, fmt.Sprintf("unknown tool: %s", p.Name))
 	}

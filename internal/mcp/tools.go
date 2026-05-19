@@ -272,10 +272,19 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 		}()
 	}
 
-	// RemoteSession: pass timeout_ms to ai-tmux server's send_input
-	if rs, ok := s.(*session.RemoteSession); ok {
-		if err := rs.WriteWithTimeout(p.Input, p.TimeoutMs); err != nil {
-			return nil, err
+	// RemoteSession without wait_for: use specialized WriteWithTimeout path.
+	// When wait_for is set, fall through to the generic wait_for logic below so
+	// that RemoteSession honours the same regex-match semantics as other session types.
+	if rs, ok := s.(*session.RemoteSession); ok && p.WaitFor == "" {
+		if p.Raw {
+			// raw input (control keys) must go through WriteRaw → send_control
+			if err := s.WriteRaw(p.Input); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := rs.WriteWithTimeout(p.Input, p.TimeoutMs); err != nil {
+				return nil, err
+			}
 		}
 		output, isComplete := rs.ReadScreen(p.TimeoutMs)
 		auditOutput = output
@@ -852,6 +861,33 @@ func (h *Handler) DetachSession(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return map[string]bool{"success": true}, nil
+}
+
+type ResizeSessionParams struct {
+	SessionID string `json:"session_id"`
+	Rows      int    `json:"rows"`
+	Cols      int    `json:"cols"`
+}
+
+func (h *Handler) ResizeSession(params json.RawMessage) (any, error) {
+	var p ResizeSessionParams
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
+		return nil, err
+	}
+	if p.Rows <= 0 || p.Cols <= 0 {
+		return nil, fmt.Errorf("rows and cols must be positive integers")
+	}
+	if p.Rows > 500 || p.Cols > 1000 {
+		return nil, fmt.Errorf("rows must be <= 500 and cols must be <= 1000")
+	}
+	s, err := h.mgr.Get(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Resize(p.Rows, p.Cols); err != nil {
+		return nil, err
+	}
+	return map[string]any{"success": true, "rows": p.Rows, "cols": p.Cols}, nil
 }
 
 // maybeAutoSendSecret checks if the session has a pending secret and the output
