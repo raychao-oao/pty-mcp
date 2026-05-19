@@ -69,7 +69,9 @@ detach_session()          → close Claude Code, task continues
 | **Settle detection** | Waits for output to settle before returning (smart timeout) |
 | **Pattern matching** | `wait_for` blocks until a regex pattern appears in output (v0.2.0) |
 | **Bounded memory** | Ring buffer prevents OOM on long-running sessions (v0.2.0) |
+| **Resize terminal** | Resize the PTY window for local, SSH, serial, and persistent remote sessions (v0.10.0) |
 | **Audit log** | Optional voluntary operation log — record `send_input` commands to a collector for review and traceability (v0.8.0) |
+| **Audit redaction** | Credentials, auth headers, and PEM keys are automatically scrubbed before being written to the audit log (v0.10.0) |
 
 ## Architecture
 
@@ -254,6 +256,7 @@ send_input(session_id, "echo $?")         → check build result
 | `list_sessions` | List all active sessions |
 | `close_session` | Close a session (terminates remote PTY) |
 | `detach_session` | Disconnect but keep remote PTY running |
+| `resize_session` | Resize the terminal window (rows/cols) for any session type |
 | `list_remote_sessions` | List persistent sessions on a remote host |
 
 > ¹ **`send_secret` platform support**: macOS uses a native password dialog (osascript). WSL2 uses `powershell.exe Get-Credential` (Windows GUI dialog). Linux with a display server uses `zenity` or `kdialog`. Headless Linux falls back to `/dev/tty`.
@@ -272,6 +275,11 @@ pty-mcp includes an optional audit log feature that records every `send_input` c
 - A `cmd_id` linking the command to its output
 
 `send_secret` is **never logged** — secrets entered via the GUI dialog do not appear in the audit log.
+
+Commands and output snippets are **automatically redacted** before being written. The following patterns are replaced with `[REDACTED]` or `[PRIVATE KEY REDACTED]`:
+- Key-value credentials: `password=`, `passwd:`, `token=`, `api_key=`, `access_key=`, `auth_token=`, `secret=`
+- HTTP Authorization headers: `Authorization: Bearer …`, `Authorization: Basic …`, `Authorization: Token …`
+- PEM private key blocks: `-----BEGIN RSA PRIVATE KEY-----` / `-----BEGIN OPENSSH PRIVATE KEY-----`
 
 ### Setup
 
@@ -347,6 +355,8 @@ ssh server "chmod +x ~/ai-tmux && sudo mv ~/ai-tmux /usr/local/bin/ai-tmux"
 - `ai-tmux list` — list active sessions
 
 The daemon auto-starts when pty-mcp connects with `persistent: true`. Sessions are reaped after 30 minutes of inactivity.
+
+pty-mcp checks `ai-tmux --version` on the remote host before opening a session and returns a clear error if the binary is missing or below the minimum required version — no cryptic connection errors.
 
 ## SSH Config Support
 
