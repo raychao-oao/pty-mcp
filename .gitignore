@@ -8,3 +8,6 @@ pty-mcp-linux-arm64
 ai-tmux-linux-arm64
 docs/superpowers/
 ISSUES-*.md
+CLAUDE.md
+CLAUDE.local.md
+docs/ai_collaboration/
