@@ -90,6 +90,7 @@ func (c *Client) SendCmd(entry CmdEntry) error {
 	if c.cfg.URL == "" {
 		return nil
 	}
+	entry.Cmd = Redact(entry.Cmd)
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return nil
@@ -106,6 +107,7 @@ func (c *Client) SendOutput(entry OutputEntry) {
 	if c.cfg.URL == "" {
 		return
 	}
+	entry.OutputSnippet = Redact(entry.OutputSnippet)
 	data, _ := json.Marshal(entry)
 	c.enqueue(data)
 }
