@@ -10,6 +10,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -244,6 +246,83 @@ func buildClientConfig(cfg SSHConfig) (*gossh.ClientConfig, error) {
 	}, nil
 }
 
+// minAiTmuxVersion is the oldest ai-tmux release that pty-mcp supports.
+// Bump this when a new protocol feature becomes required.
+const minAiTmuxVersion = "0.9.0"
+
+// parseAiTmuxVersion extracts the bare version number from "ai-tmux 0.9.1\n".
+func parseAiTmuxVersion(output string) string {
+	fields := strings.Fields(output)
+	if len(fields) >= 2 {
+		return fields[1]
+	}
+	return ""
+}
+
+// semverAtLeast reports whether v >= min (both in "MAJOR.MINOR.PATCH" form).
+// "dev" on either side skips the check and returns true.
+func semverAtLeast(v, min string) bool {
+	if v == "dev" || min == "dev" {
+		return true
+	}
+	split := func(s string) [3]int {
+		parts := strings.SplitN(s, ".", 3)
+		for len(parts) < 3 {
+			parts = append(parts, "0")
+		}
+		var out [3]int
+		for i := 0; i < 3; i++ {
+			out[i], _ = strconv.Atoi(parts[i])
+		}
+		return out
+	}
+	vp, mp := split(v), split(min)
+	for i := 0; i < 3; i++ {
+		if vp[i] < mp[i] {
+			return false
+		}
+		if vp[i] > mp[i] {
+			return true
+		}
+	}
+	return true
+}
+
+// RemoteAiTmuxVersion opens a short-lived SSH session to the remote host and
+// returns the version string reported by "ai-tmux --version" (e.g. "0.9.1").
+// Returns an error when ai-tmux is absent or unreachable.
+func RemoteAiTmuxVersion(cfg SSHConfig) (string, error) {
+	resolveSSHConfig(&cfg)
+	config, err := buildClientConfig(cfg)
+	if err != nil {
+		return "", err
+	}
+	if cfg.Port == "" {
+		cfg.Port = "22"
+	}
+	client, err := gossh.Dial("tcp", net.JoinHostPort(cfg.Host, cfg.Port), config)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer sess.Close()
+
+	out, err := sess.Output("ai-tmux --version")
+	if err != nil {
+		return "", fmt.Errorf("ai-tmux not found on %s (install it first)", cfg.Host)
+	}
+	v := parseAiTmuxVersion(string(out))
+	if v == "" {
+		return "", fmt.Errorf("ai-tmux --version returned unexpected output: %q", string(out))
+	}
+	return v, nil
+}
+
 // HasAiTmux checks whether the remote host has the ai-tmux binary
 func HasAiTmux(cfg SSHConfig) bool {
 	resolveSSHConfig(&cfg)
@@ -291,6 +370,21 @@ func NewRemoteSSHSession(cfg SSHConfig, command string, attachID string) (*Remot
 	client, err := gossh.Dial("tcp", addr, config)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
+	}
+
+	// Version check: reuse the established connection, one extra session.
+	if verSess, verErr := client.NewSession(); verErr == nil {
+		out, runErr := verSess.Output("ai-tmux --version")
+		verSess.Close()
+		if runErr != nil {
+			client.Close()
+			return nil, fmt.Errorf("ai-tmux not found on %s — install it first (see: https://github.com/raychao-oao/pty-mcp)", cfg.Host)
+		}
+		remoteVer := parseAiTmuxVersion(string(out))
+		if remoteVer != "" && !semverAtLeast(remoteVer, minAiTmuxVersion) {
+			client.Close()
+			return nil, fmt.Errorf("ai-tmux on %s is version %s, need >= %s — please upgrade", cfg.Host, remoteVer, minAiTmuxVersion)
+		}
 	}
 
 	sess, err := client.NewSession()
