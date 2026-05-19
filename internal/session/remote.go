@@ -193,7 +193,22 @@ func (r *RemoteSession) WriteRaw(data string) error {
 	// but ai-tmux send_control requires key names, so reverse lookup is needed
 	key, ok := rawToKeyName[data]
 	if !ok {
-		return fmt.Errorf("unknown control sequence for remote session")
+		// Not a known control sequence — write bytes as-is via send_raw (no "\r" appended).
+		resp, err := r.call("send_raw", aitx.SendRawParams{
+			SessionID: r.sessionID,
+			Data:      data,
+			TimeoutMs: 3000,
+		})
+		if err != nil {
+			return err
+		}
+		b, _ := json.Marshal(resp.Result)
+		var result aitx.OutputResult
+		json.Unmarshal(b, &result)
+		r.cacheMu.Lock()
+		r.cachedOut = &result
+		r.cacheMu.Unlock()
+		return nil
 	}
 	resp, err := r.call("send_control", aitx.SendControlParams{
 		SessionID: r.sessionID,
@@ -278,6 +293,15 @@ func (r *RemoteSession) Close() error {
 
 // Buffer returns the local RingBuffer that accumulates output from ReadScreen calls.
 func (r *RemoteSession) Buffer() *buffer.RingBuffer { return r.localBuf }
+
+func (r *RemoteSession) Resize(rows, cols int) error {
+	_, err := r.call("resize_session", aitx.ResizeParams{
+		SessionID: r.sessionID,
+		Rows:      rows,
+		Cols:      cols,
+	})
+	return err
+}
 
 // PollRemote continuously polls the remote session for output, feeding the local buffer.
 // It is safe to call concurrently — only one goroutine will poll at a time.

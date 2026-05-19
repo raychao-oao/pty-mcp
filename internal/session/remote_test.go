@@ -166,6 +166,43 @@ func TestRemoteSession_ReadScreen_FallsBackToRPC(t *testing.T) {
 	}
 }
 
+// TestRemoteSession_WriteRaw_NonControlUsesSendRaw verifies that WriteRaw with
+// arbitrary input (not a known control sequence) routes through send_raw — which
+// writes bytes without appending "\r" — rather than send_input or returning an error.
+func TestRemoteSession_WriteRaw_NonControlUsesSendRaw(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+
+	rs := attachSession(t, func(req aitx.Request) aitx.Response {
+		mu.Lock()
+		calls = append(calls, req.Method)
+		mu.Unlock()
+		if req.Method == "send_raw" {
+			return aitx.Response{ID: req.ID, Result: aitx.OutputResult{
+				Output: "y\n$ ", IsAlive: true, IsComplete: true,
+			}}
+		}
+		return aitx.Response{ID: req.ID, Error: "unexpected method: " + req.Method}
+	})
+
+	// "y" is not a control sequence — must use send_raw (no "\r" appended server-side).
+	if err := rs.WriteRaw("y"); err != nil {
+		t.Fatalf("WriteRaw(\"y\"): %v", err)
+	}
+
+	out, _ := rs.ReadScreen(1000)
+	if out != "y\n$ " {
+		t.Errorf("ReadScreen output: want %q, got %q", "y\n$ ", out)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), calls...)
+	mu.Unlock()
+	if len(got) != 1 || got[0] != "send_raw" {
+		t.Errorf("RPC calls: want [send_raw], got %v", got)
+	}
+}
+
 // TestRemoteSession_PollRemote_FeedsBuffer verifies that PollRemote continuously
 // calls ReadScreen and feeds output into the local buffer — the mechanism that
 // makes wait_for work for remote sessions.

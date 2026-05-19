@@ -50,6 +50,20 @@ type SessionIDParams struct {
 	SessionID string `json:"session_id"`
 }
 
+type ResizeParams struct {
+	SessionID string `json:"session_id"`
+	Rows      int    `json:"rows"`
+	Cols      int    `json:"cols"`
+}
+
+// SendRawParams is used by send_raw: writes bytes directly to the PTY without
+// appending "\r" or any other transformation, then reads output.
+type SendRawParams struct {
+	SessionID string `json:"session_id"`
+	Data      string `json:"data"`
+	TimeoutMs int    `json:"timeout_ms"`
+}
+
 // --- Results ---
 
 type SessionResult struct {
