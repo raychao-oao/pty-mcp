@@ -105,6 +105,8 @@ func (srv *Server) handle(req *Request) Response {
 		return srv.closeSession(req)
 	case "resize_session":
 		return srv.resizeSession(req)
+	case "send_raw":
+		return srv.sendRaw(req)
 	default:
 		return Response{ID: req.ID, Error: fmt.Sprintf("unknown method: %s", req.Method)}
 	}
@@ -223,6 +225,29 @@ func (srv *Server) sendControl(req *Request) Response {
 	}
 
 	output, isComplete := s.ReadScreen(5000)
+	return Response{ID: req.ID, Result: OutputResult{
+		Output:     output,
+		IsAlive:    s.IsAlive(),
+		IsComplete: isComplete,
+	}}
+}
+
+func (srv *Server) sendRaw(req *Request) Response {
+	var p SendRawParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+
+	s, err := srv.getSession(p.SessionID)
+	if err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+
+	if err := s.WriteRaw(p.Data); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+
+	output, isComplete := s.ReadScreen(p.TimeoutMs)
 	return Response{ID: req.ID, Result: OutputResult{
 		Output:     output,
 		IsAlive:    s.IsAlive(),

@@ -193,8 +193,22 @@ func (r *RemoteSession) WriteRaw(data string) error {
 	// but ai-tmux send_control requires key names, so reverse lookup is needed
 	key, ok := rawToKeyName[data]
 	if !ok {
-		// Not a known control sequence — send as plain input via send_input.
-		return r.WriteWithTimeout(data, 0)
+		// Not a known control sequence — write bytes as-is via send_raw (no "\r" appended).
+		resp, err := r.call("send_raw", aitx.SendRawParams{
+			SessionID: r.sessionID,
+			Data:      data,
+			TimeoutMs: 3000,
+		})
+		if err != nil {
+			return err
+		}
+		b, _ := json.Marshal(resp.Result)
+		var result aitx.OutputResult
+		json.Unmarshal(b, &result)
+		r.cacheMu.Lock()
+		r.cachedOut = &result
+		r.cacheMu.Unlock()
+		return nil
 	}
 	resp, err := r.call("send_control", aitx.SendControlParams{
 		SessionID: r.sessionID,

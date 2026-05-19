@@ -166,10 +166,10 @@ func TestRemoteSession_ReadScreen_FallsBackToRPC(t *testing.T) {
 	}
 }
 
-// TestRemoteSession_WriteRaw_NonControlFallsBackToSendInput verifies that WriteRaw
-// with arbitrary input (not a known control sequence) routes through send_input
-// instead of returning an error.
-func TestRemoteSession_WriteRaw_NonControlFallsBackToSendInput(t *testing.T) {
+// TestRemoteSession_WriteRaw_NonControlUsesSendRaw verifies that WriteRaw with
+// arbitrary input (not a known control sequence) routes through send_raw — which
+// writes bytes without appending "\r" — rather than send_input or returning an error.
+func TestRemoteSession_WriteRaw_NonControlUsesSendRaw(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 
@@ -177,7 +177,7 @@ func TestRemoteSession_WriteRaw_NonControlFallsBackToSendInput(t *testing.T) {
 		mu.Lock()
 		calls = append(calls, req.Method)
 		mu.Unlock()
-		if req.Method == "send_input" {
+		if req.Method == "send_raw" {
 			return aitx.Response{ID: req.ID, Result: aitx.OutputResult{
 				Output: "y\n$ ", IsAlive: true, IsComplete: true,
 			}}
@@ -185,7 +185,7 @@ func TestRemoteSession_WriteRaw_NonControlFallsBackToSendInput(t *testing.T) {
 		return aitx.Response{ID: req.ID, Error: "unexpected method: " + req.Method}
 	})
 
-	// "y" is not a control sequence — must not error and must use send_input.
+	// "y" is not a control sequence — must use send_raw (no "\r" appended server-side).
 	if err := rs.WriteRaw("y"); err != nil {
 		t.Fatalf("WriteRaw(\"y\"): %v", err)
 	}
@@ -198,8 +198,8 @@ func TestRemoteSession_WriteRaw_NonControlFallsBackToSendInput(t *testing.T) {
 	mu.Lock()
 	got := append([]string(nil), calls...)
 	mu.Unlock()
-	if len(got) != 1 || got[0] != "send_input" {
-		t.Errorf("RPC calls: want [send_input], got %v", got)
+	if len(got) != 1 || got[0] != "send_raw" {
+		t.Errorf("RPC calls: want [send_raw], got %v", got)
 	}
 }
 
