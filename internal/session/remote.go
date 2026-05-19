@@ -195,11 +195,22 @@ func (r *RemoteSession) WriteRaw(data string) error {
 	if !ok {
 		return fmt.Errorf("unknown control sequence for remote session")
 	}
-	_, err := r.call("send_control", aitx.SendControlParams{
+	resp, err := r.call("send_control", aitx.SendControlParams{
 		SessionID: r.sessionID,
 		Key:       key,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// ai-tmux server reads output after sending the control key; cache it so the
+	// subsequent ReadScreen call returns that output instead of issuing a second RPC.
+	b, _ := json.Marshal(resp.Result)
+	var result aitx.OutputResult
+	json.Unmarshal(b, &result)
+	r.cacheMu.Lock()
+	r.cachedOut = &result
+	r.cacheMu.Unlock()
+	return nil
 }
 
 func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
