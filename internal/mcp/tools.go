@@ -863,6 +863,30 @@ func (h *Handler) DetachSession(params json.RawMessage) (any, error) {
 	return map[string]bool{"success": true}, nil
 }
 
+type ResizeSessionParams struct {
+	SessionID string `json:"session_id"`
+	Rows      int    `json:"rows"`
+	Cols      int    `json:"cols"`
+}
+
+func (h *Handler) ResizeSession(params json.RawMessage) (any, error) {
+	var p ResizeSessionParams
+	if err := UnmarshalMcpArgs(params, &p); err != nil {
+		return nil, err
+	}
+	if p.Rows <= 0 || p.Cols <= 0 {
+		return nil, fmt.Errorf("rows and cols must be positive integers")
+	}
+	s, err := h.mgr.Get(p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Resize(p.Rows, p.Cols); err != nil {
+		return nil, err
+	}
+	return map[string]any{"success": true, "rows": p.Rows, "cols": p.Cols}, nil
+}
+
 // maybeAutoSendSecret checks if the session has a pending secret and the output
 // indicates a password prompt. If so, sends the secret immediately and returns true.
 // If output is not a password prompt, the secret is restored for a later call.

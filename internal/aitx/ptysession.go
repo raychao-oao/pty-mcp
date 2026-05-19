@@ -192,6 +192,13 @@ func (s *PTYSession) CreatedAt() time.Time      { return s.createdAt }
 func (s *PTYSession) LastUsed() time.Time        { return s.lastUsed.Load().(time.Time) }
 func (s *PTYSession) Buffer() *buffer.RingBuffer { return s.buf }
 
+func (s *PTYSession) Resize(rows, cols int) error {
+	return pty.Setsize(s.ptyFile, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
+}
+
 func (s *PTYSession) Write(input string) error {
 	if !s.alive.Load() {
 		return fmt.Errorf("session is not alive")

@@ -279,6 +279,15 @@ func (r *RemoteSession) Close() error {
 // Buffer returns the local RingBuffer that accumulates output from ReadScreen calls.
 func (r *RemoteSession) Buffer() *buffer.RingBuffer { return r.localBuf }
 
+func (r *RemoteSession) Resize(rows, cols int) error {
+	_, err := r.call("resize_session", aitx.ResizeParams{
+		SessionID: r.sessionID,
+		Rows:      rows,
+		Cols:      cols,
+	})
+	return err
+}
+
 // PollRemote continuously polls the remote session for output, feeding the local buffer.
 // It is safe to call concurrently — only one goroutine will poll at a time.
 func (r *RemoteSession) PollRemote(ctx context.Context) {

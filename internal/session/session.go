@@ -22,6 +22,7 @@ type Session interface {
 	Close() error
 	Buffer() *buffer.RingBuffer
 	PollRemote(ctx context.Context)
+	Resize(rows, cols int) error
 }
 
 // Info holds session metadata (used by list)

@@ -103,6 +103,8 @@ func (srv *Server) handle(req *Request) Response {
 		return srv.listSessions(req)
 	case "close_session":
 		return srv.closeSession(req)
+	case "resize_session":
+		return srv.resizeSession(req)
 	default:
 		return Response{ID: req.ID, Error: fmt.Sprintf("unknown method: %s", req.Method)}
 	}
@@ -262,6 +264,24 @@ func (srv *Server) closeSession(req *Request) Response {
 	srv.mu.Unlock()
 
 	s.Close()
+	return Response{ID: req.ID, Result: map[string]bool{"success": true}}
+}
+
+func (srv *Server) resizeSession(req *Request) Response {
+	var p ResizeParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if p.Rows <= 0 || p.Cols <= 0 {
+		return Response{ID: req.ID, Error: "rows and cols must be positive"}
+	}
+	s, err := srv.getSession(p.SessionID)
+	if err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if err := s.Resize(p.Rows, p.Cols); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
 	return Response{ID: req.ID, Result: map[string]bool{"success": true}}
 }
 

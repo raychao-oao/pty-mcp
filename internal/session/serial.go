@@ -156,4 +156,5 @@ func (s *SerialSession) Close() error {
 }
 
 func (s *SerialSession) Buffer() *buffer.RingBuffer { return s.buf }
-func (s *SerialSession) PollRemote(_ context.Context) {} // no-op for serial
+func (s *SerialSession) PollRemote(_ context.Context) {}              // no-op for serial
+func (s *SerialSession) Resize(_, _ int) error       { return fmt.Errorf("resize not supported for serial sessions") }

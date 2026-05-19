@@ -450,3 +450,4 @@ func (s *SSHSession) Close() error {
 
 func (s *SSHSession) Buffer() *buffer.RingBuffer { return s.buf }
 func (s *SSHSession) PollRemote(_ context.Context) {} // no-op for SSH
+func (s *SSHSession) Resize(rows, cols int) error  { return s.session.WindowChange(rows, cols) }

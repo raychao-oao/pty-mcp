@@ -53,3 +53,4 @@ func (s *LocalSession) Close() error {
 
 func (s *LocalSession) Buffer() *buffer.RingBuffer { return s.pty.Buffer() }
 func (s *LocalSession) PollRemote(_ context.Context) {} // no-op for local
+func (s *LocalSession) Resize(rows, cols int) error  { return s.pty.Resize(rows, cols) }

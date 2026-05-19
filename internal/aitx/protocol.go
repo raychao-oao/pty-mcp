@@ -50,6 +50,12 @@ type SessionIDParams struct {
 	SessionID string `json:"session_id"`
 }
 
+type ResizeParams struct {
+	SessionID string `json:"session_id"`
+	Rows      int    `json:"rows"`
+	Cols      int    `json:"cols"`
+}
+
 // --- Results ---
 
 type SessionResult struct {
