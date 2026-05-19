@@ -372,19 +372,26 @@ func NewRemoteSSHSession(cfg SSHConfig, command string, attachID string) (*Remot
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 
-	// Version check: reuse the established connection, one extra session.
-	if verSess, verErr := client.NewSession(); verErr == nil {
-		out, runErr := verSess.Output("ai-tmux --version")
-		verSess.Close()
-		if runErr != nil {
-			client.Close()
-			return nil, fmt.Errorf("ai-tmux not found on %s — install it first (see: https://github.com/raychao-oao/pty-mcp)", cfg.Host)
-		}
-		remoteVer := parseAiTmuxVersion(string(out))
-		if remoteVer != "" && !semverAtLeast(remoteVer, minAiTmuxVersion) {
-			client.Close()
-			return nil, fmt.Errorf("ai-tmux on %s is version %s, need >= %s — please upgrade", cfg.Host, remoteVer, minAiTmuxVersion)
-		}
+	// Version check: reuse the established connection, one extra session. Fail closed.
+	verSess, verErr := client.NewSession()
+	if verErr != nil {
+		client.Close()
+		return nil, fmt.Errorf("version check on %s: open SSH session: %w", cfg.Host, verErr)
+	}
+	out, runErr := verSess.Output("ai-tmux --version")
+	verSess.Close()
+	if runErr != nil {
+		client.Close()
+		return nil, fmt.Errorf("ai-tmux not found on %s — install it first (see: https://github.com/raychao-oao/pty-mcp)", cfg.Host)
+	}
+	remoteVer := parseAiTmuxVersion(string(out))
+	if remoteVer == "" {
+		client.Close()
+		return nil, fmt.Errorf("ai-tmux --version on %s returned unexpected output: %q", cfg.Host, string(out))
+	}
+	if !semverAtLeast(remoteVer, minAiTmuxVersion) {
+		client.Close()
+		return nil, fmt.Errorf("ai-tmux on %s is version %s, need >= %s — please upgrade", cfg.Host, remoteVer, minAiTmuxVersion)
 	}
 
 	sess, err := client.NewSession()

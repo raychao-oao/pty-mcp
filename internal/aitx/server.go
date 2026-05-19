@@ -275,6 +275,9 @@ func (srv *Server) resizeSession(req *Request) Response {
 	if p.Rows <= 0 || p.Cols <= 0 {
 		return Response{ID: req.ID, Error: "rows and cols must be positive"}
 	}
+	if p.Rows > 500 || p.Cols > 1000 {
+		return Response{ID: req.ID, Error: "rows must be <= 500 and cols must be <= 1000"}
+	}
 	s, err := srv.getSession(p.SessionID)
 	if err != nil {
 		return Response{ID: req.ID, Error: err.Error()}

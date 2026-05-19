@@ -193,7 +193,8 @@ func (r *RemoteSession) WriteRaw(data string) error {
 	// but ai-tmux send_control requires key names, so reverse lookup is needed
 	key, ok := rawToKeyName[data]
 	if !ok {
-		return fmt.Errorf("unknown control sequence for remote session")
+		// Not a known control sequence — send as plain input via send_input.
+		return r.WriteWithTimeout(data, 0)
 	}
 	resp, err := r.call("send_control", aitx.SendControlParams{
 		SessionID: r.sessionID,

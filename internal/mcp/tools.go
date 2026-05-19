@@ -877,6 +877,9 @@ func (h *Handler) ResizeSession(params json.RawMessage) (any, error) {
 	if p.Rows <= 0 || p.Cols <= 0 {
 		return nil, fmt.Errorf("rows and cols must be positive integers")
 	}
+	if p.Rows > 500 || p.Cols > 1000 {
+		return nil, fmt.Errorf("rows must be <= 500 and cols must be <= 1000")
+	}
 	s, err := h.mgr.Get(p.SessionID)
 	if err != nil {
 		return nil, err
