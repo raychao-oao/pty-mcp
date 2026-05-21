@@ -2,6 +2,11 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.1] - 2026-05-21
+
+### Fixed
+- `install.sh` VERSION was not bumped during v0.11.0 release, causing the version-check logic to always download the stale v0.10.0 binary instead of upgrading. Plugin `update` command now correctly installs the new binary on next launch.
+
 ## [v0.11.0] - 2026-05-21
 
 ### Added
