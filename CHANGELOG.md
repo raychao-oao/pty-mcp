@@ -2,6 +2,16 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.0] - 2026-05-21
+
+### Added
+- **AI-native PAM protocol consumer side** — pty-mcp is now a first-class consumer of the HPKE sealed credential delivery protocol from cred-mcp; plaintext never enters LLM context.
+  - `get_credential_bundle` tool — generates a signed `ConsumerBundle` (Ed25519 identity key + ephemeral X25519 session key); safe to pass to AI as transport to cred-mcp
+  - `inject_secret` tool — receives a `SealedBox` from cred-mcp, HPKE-decrypts using the stored session key, writes plaintext directly to PTY via `WriteRaw`, zeroizes memory; returns only `{"success":true}`
+  - Session keys are single-use: a second `inject_secret` with the same `session_id` always errors
+  - Identity key persisted at `~/.config/pty-mcp/identity.key` (Ed25519 seed, mode 0600)
+- **Credential audit log** — `bundle_generated`, `secret_injected`, and `inject_failed` events sent to audit collector; no plaintext, ciphertext, encapped key, or private key material is ever logged
+
 ## [v0.10.0] - 2026-05-19
 
 ### Added
