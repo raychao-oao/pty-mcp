@@ -2,6 +2,11 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.2] - 2026-05-21
+
+### Fixed
+- MCP `serverInfo.version` was hardcoded as `"0.7.2"` in `internal/mcp/server.go`. Now reads the `main.version` variable set via ldflags at build time, so the version reported to MCP clients matches the actual release tag.
+
 ## [v0.11.1] - 2026-05-21
 
 ### Fixed
