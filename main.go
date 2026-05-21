@@ -93,6 +93,7 @@ func main() {
 	}
 
 	mgr := session.NewManager(1800) // 30 min idle timeout
+	mcp.Version = version
 	handler := mcp.NewHandler(mgr, auditClient)
 	mcp.Serve(handler)
 }
