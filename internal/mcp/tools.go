@@ -46,12 +46,19 @@ func UnmarshalMcpArgs(data json.RawMessage, target any) error {
 }
 
 type Handler struct {
-	mgr   *session.Manager
-	audit *audit.Client // nil if audit is not configured
+	mgr             *session.Manager
+	audit           *audit.Client // nil if audit is not configured
+	credStore       *credentialStore
+	identityKeyPath string
 }
 
 func NewHandler(mgr *session.Manager, auditClient *audit.Client) *Handler {
-	return &Handler{mgr: mgr, audit: auditClient}
+	return &Handler{
+		mgr:             mgr,
+		audit:           auditClient,
+		credStore:       newCredentialStore(),
+		identityKeyPath: defaultIdentityKeyPath(),
+	}
 }
 
 type CreateSSHParams struct {

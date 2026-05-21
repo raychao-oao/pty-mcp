@@ -163,6 +163,21 @@ var toolsList = []map[string]any{
 		},
 		"required": []string{"session_id", "rows", "cols"},
 	}},
+	{"name": "get_credential_bundle", "description": "Generate a signed ConsumerBundle for use with cred-mcp's vault_seal tool. The bundle contains only public keys and is safe to pass to the AI. The session private key is held in memory for a matching inject_secret call. Call this before request_authorization + vault_seal on cred-mcp.", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"consumer_id": map[string]any{"type": "string", "description": "Consumer identity (default: \"pty-mcp\")"},
+			"ttl_seconds": map[string]any{"type": "integer", "description": "Bundle validity in seconds (default: 300, max: 3600)"},
+		},
+	}},
+	{"name": "inject_secret", "description": "Decrypt a SealedBox from cred-mcp and write the plaintext directly into a PTY session. The plaintext never appears in AI context or tool results — only {success:true} is returned. Call after vault_seal on cred-mcp.", "inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"pty_session_id": map[string]any{"type": "string", "description": "ID of the PTY session to inject the secret into"},
+			"sealed_box":     map[string]any{"type": "object", "description": "SealedBox JSON object returned by cred-mcp's vault_seal tool"},
+		},
+		"required": []string{"pty_session_id", "sealed_box"},
+	}},
 }
 
 func Serve(h *Handler) {
@@ -253,6 +268,10 @@ func handleToolCall(h *Handler, req *request) response {
 		result, err = h.DetachSession(p.Arguments)
 	case "resize_session":
 		result, err = h.ResizeSession(p.Arguments)
+	case "get_credential_bundle":
+		result, err = h.GetCredentialBundle(p.Arguments)
+	case "inject_secret":
+		result, err = h.InjectSecret(p.Arguments)
 	default:
 		return errResp(req.ID, -32601, fmt.Sprintf("unknown tool: %s", p.Name))
 	}
