@@ -191,6 +191,37 @@ func isClientError(err error) bool {
 	return errors.As(err, &he) && he.code >= 400 && he.code < 500
 }
 
+// CredentialEntry records a sealed-credential lifecycle event.
+// No plaintext, ciphertext, encapped_key, or private key material is ever included.
+type CredentialEntry struct {
+	EventID      string `json:"event_id"`
+	TS           string `json:"ts"`
+	User         string `json:"user"`
+	Event        string `json:"event"`                      // "bundle_generated" | "secret_injected" | "inject_failed"
+	ConsumerID   string `json:"consumer_id"`
+	SessionKeyID string `json:"session_key_id"`
+	ExpiresAt    string `json:"expires_at,omitempty"`        // bundle_generated only
+	PtySessionID string `json:"pty_session_id,omitempty"`   // secret_injected / inject_failed
+	ItemID       string `json:"item_id,omitempty"`           // secret_injected / inject_failed
+	Purpose      string `json:"purpose,omitempty"`           // secret_injected / inject_failed
+	Error        string `json:"error,omitempty"`             // inject_failed only
+}
+
+// SendCredential sends a credential lifecycle audit entry. Always best-effort.
+func (c *Client) SendCredential(entry CredentialEntry) {
+	if c.cfg.URL == "" {
+		return
+	}
+	if entry.EventID == "" {
+		entry.EventID = NewCmdID()
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	c.enqueue(data)
+}
+
 // Snippet returns at most maxBytes bytes of s, truncated at a UTF-8 character boundary.
 func Snippet(s string, maxBytes int) string {
 	if len(s) <= maxBytes {

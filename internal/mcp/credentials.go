@@ -10,6 +10,7 @@ import (
 
 	"github.com/raychao-oao/cred-proto/pkg/consumersdk"
 	"github.com/raychao-oao/cred-proto/pkg/credproto"
+	"github.com/raychao-oao/pty-mcp/internal/audit"
 )
 
 // pendingCred holds a session keypair alongside the bundle it was created with.
@@ -108,6 +109,17 @@ func (h *Handler) GetCredentialBundle(params json.RawMessage) (any, error) {
 
 	h.credStore.store(bundle, sk)
 
+	if h.audit != nil {
+		go h.audit.SendCredential(audit.CredentialEntry{
+			TS:           time.Now().UTC().Format(time.RFC3339Nano),
+			User:         h.audit.User(),
+			Event:        "bundle_generated",
+			ConsumerID:   bundle.ConsumerID,
+			SessionKeyID: bundle.SessionID,
+			ExpiresAt:    bundle.ExpiresAt.Format(time.RFC3339Nano),
+		})
+	}
+
 	return map[string]any{
 		"bundle":         bundle,
 		"session_key_id": bundle.SessionID,
@@ -133,12 +145,16 @@ func (h *Handler) InjectSecret(params json.RawMessage) (any, error) {
 
 	cred, ok := h.credStore.take(box.SessionID)
 	if !ok {
-		return nil, fmt.Errorf("no credential found for session_id %q (already used or expired)", box.SessionID)
+		err := fmt.Errorf("no credential found for session_id %q (already used or expired)", box.SessionID)
+		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, err.Error())
+		return nil, err
 	}
 
 	plaintext, err := consumersdk.Open(&box, cred.sessionKey, cred.bundle)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt: %w", err)
+		wrapped := fmt.Errorf("decrypt: %w", err)
+		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, wrapped.Error())
+		return nil, wrapped
 	}
 	defer func() {
 		for i := range plaintext {
@@ -148,11 +164,32 @@ func (h *Handler) InjectSecret(params json.RawMessage) (any, error) {
 
 	s, err := h.mgr.Get(raw.PtySessionID)
 	if err != nil {
+		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, err.Error())
 		return nil, err
 	}
 	if err := s.WriteRaw(string(plaintext) + "\r"); err != nil {
-		return nil, fmt.Errorf("write to session: %w", err)
+		wrapped := fmt.Errorf("write to session: %w", err)
+		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, wrapped.Error())
+		return nil, wrapped
 	}
 
+	h.sendInjectAudit("secret_injected", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, "")
 	return map[string]any{"success": true}, nil
+}
+
+func (h *Handler) sendInjectAudit(event, consumerID, sessionKeyID, ptySessionID, itemID, purpose, errMsg string) {
+	if h.audit == nil {
+		return
+	}
+	go h.audit.SendCredential(audit.CredentialEntry{
+		TS:           time.Now().UTC().Format(time.RFC3339Nano),
+		User:         h.audit.User(),
+		Event:        event,
+		ConsumerID:   consumerID,
+		SessionKeyID: sessionKeyID,
+		PtySessionID: ptySessionID,
+		ItemID:       itemID,
+		Purpose:      purpose,
+		Error:        errMsg,
+	})
 }

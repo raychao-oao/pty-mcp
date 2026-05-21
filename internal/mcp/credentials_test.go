@@ -5,10 +5,15 @@ import (
 	"crypto/ecdh"
 	"crypto/hpke"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/raychao-oao/cred-proto/pkg/credproto"
+	"github.com/raychao-oao/pty-mcp/internal/audit"
 	"github.com/raychao-oao/pty-mcp/internal/buffer"
 	"github.com/raychao-oao/pty-mcp/internal/session"
 )
@@ -213,6 +218,142 @@ func TestInjectSecret_SingleUse(t *testing.T) {
 	}
 	if _, err := h.InjectSecret(injectParams); err == nil {
 		t.Fatal("expected error on second InjectSecret (session key already consumed)")
+	}
+}
+
+// newTestHandlerWithAudit returns a Handler wired to a test audit collector.
+// The returned channel receives each JSON body posted to /audit.
+func newTestHandlerWithAudit(t *testing.T) (*Handler, <-chan []byte) {
+	t.Helper()
+	ch := make(chan []byte, 16)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		ch <- body
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	auditClient := audit.NewClient(audit.Config{URL: srv.URL, User: "ray", Token: "", Mode: "best-effort"})
+	t.Cleanup(auditClient.Close)
+
+	mgr := session.NewManager(0)
+	h := NewHandler(mgr, auditClient)
+	h.identityKeyPath = t.TempDir() + "/identity.key"
+	return h, ch
+}
+
+func waitAuditEvent(t *testing.T, ch <-chan []byte) map[string]any {
+	t.Helper()
+	select {
+	case body := <-ch:
+		var m map[string]any
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Fatalf("audit body not valid JSON: %v\n%s", err, body)
+		}
+		return m
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for audit event")
+		return nil
+	}
+}
+
+func TestAudit_GetCredentialBundle_SendsEvent(t *testing.T) {
+	h, ch := newTestHandlerWithAudit(t)
+
+	params, _ := json.Marshal(map[string]any{"consumer_id": "pty-mcp", "ttl_seconds": 60})
+	result, err := h.GetCredentialBundle(params)
+	if err != nil {
+		t.Fatalf("GetCredentialBundle: %v", err)
+	}
+	bundle := getBundleFromResult(t, result)
+
+	m := waitAuditEvent(t, ch)
+	if m["event"] != "bundle_generated" {
+		t.Errorf("event = %q, want bundle_generated", m["event"])
+	}
+	if m["consumer_id"] != "pty-mcp" {
+		t.Errorf("consumer_id = %q, want pty-mcp", m["consumer_id"])
+	}
+	if m["session_key_id"] != bundle.SessionID {
+		t.Errorf("session_key_id mismatch")
+	}
+	if m["user"] != "ray" {
+		t.Errorf("user = %q, want ray", m["user"])
+	}
+}
+
+func TestAudit_InjectSecret_SendsSuccessEvent(t *testing.T) {
+	h, ch := newTestHandlerWithAudit(t)
+
+	// Get bundle — consumes the bundle_generated event
+	params, _ := json.Marshal(map[string]any{"ttl_seconds": 60})
+	result, _ := h.GetCredentialBundle(params)
+	bundle := getBundleFromResult(t, result)
+	waitAuditEvent(t, ch) // discard bundle_generated
+
+	// Seal + inject
+	boxExp := time.Now().Add(5 * time.Minute).UTC()
+	sealedBoxJSON := sealBoxForTest(t, bundle, "item-1", "ssh-login", "box-1", boxExp, []byte("s3cr3t"))
+	fs := &fakeSession{id: "sess-1", rb: buffer.NewRingBuffer(1024)}
+	h.mgr.Add(fs, "test-target") //nolint:errcheck
+
+	injectParams, _ := json.Marshal(map[string]any{
+		"pty_session_id": "sess-1",
+		"sealed_box":     json.RawMessage(sealedBoxJSON),
+	})
+	if _, err := h.InjectSecret(injectParams); err != nil {
+		t.Fatalf("InjectSecret: %v", err)
+	}
+
+	m := waitAuditEvent(t, ch)
+	if m["event"] != "secret_injected" {
+		t.Errorf("event = %q, want secret_injected", m["event"])
+	}
+	if m["item_id"] != "item-1" {
+		t.Errorf("item_id = %q, want item-1", m["item_id"])
+	}
+	if m["purpose"] != "ssh-login" {
+		t.Errorf("purpose = %q, want ssh-login", m["purpose"])
+	}
+	if m["pty_session_id"] != "sess-1" {
+		t.Errorf("pty_session_id = %q, want sess-1", m["pty_session_id"])
+	}
+	// plaintext must never appear in the audit entry
+	bodyJSON, _ := json.Marshal(m)
+	for _, forbidden := range []string{"s3cr3t", "ciphertext", "encapped_key"} {
+		if strings.Contains(string(bodyJSON), forbidden) {
+			t.Errorf("audit entry contains forbidden value %q", forbidden)
+		}
+	}
+}
+
+func TestAudit_InjectSecret_SendsFailureEvent(t *testing.T) {
+	h, ch := newTestHandlerWithAudit(t)
+
+	// A box with a session_id that was never stored
+	box := credproto.SealedBox{
+		BoxID: "x", ConsumerID: "pty-mcp", SessionID: "ghost",
+		ItemID: "item-9", Purpose: "ssh-login", ExpiresAt: time.Now().Add(time.Minute),
+	}
+	boxJSON, _ := json.Marshal(box)
+	fs := &fakeSession{id: "sess-1", rb: buffer.NewRingBuffer(1024)}
+	h.mgr.Add(fs, "test-target") //nolint:errcheck
+
+	params, _ := json.Marshal(map[string]any{
+		"pty_session_id": "sess-1",
+		"sealed_box":     json.RawMessage(boxJSON),
+	})
+	h.InjectSecret(params) //nolint:errcheck — expect error
+
+	m := waitAuditEvent(t, ch)
+	if m["event"] != "inject_failed" {
+		t.Errorf("event = %q, want inject_failed", m["event"])
+	}
+	if m["error"] == "" {
+		t.Error("expected non-empty error field in audit entry")
+	}
+	if m["item_id"] != "item-9" {
+		t.Errorf("item_id = %q, want item-9", m["item_id"])
 	}
 }
 
