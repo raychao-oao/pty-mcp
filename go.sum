@@ -12,6 +12,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/raychao-oao/cred-proto v0.0.0-20260521141951-210e504a0614 h1:VqKfJg5fXBxitN116+gRqk7j2e7CkhQy4OIZ21fyga4=
 github.com/raychao-oao/cred-proto v0.0.0-20260521141951-210e504a0614/go.mod h1:MK2HWk1wIs7Yj7af4Q+4ZY+yds98WzmhJk7FdNc6F2s=
+github.com/raychao-oao/cred-proto v0.1.0 h1:V9f+ClZEZzDE9YwCBu+EJX5y2fIIKBsKrJNtkWW3MhY=
+github.com/raychao-oao/cred-proto v0.1.0/go.mod h1:MK2HWk1wIs7Yj7af4Q+4ZY+yds98WzmhJk7FdNc6F2s=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 go.bug.st/serial v1.6.4 h1:7FmqNPgVp3pu2Jz5PoPtbZ9jJO5gnEnZIvnI1lzve8A=
