@@ -1058,7 +1058,7 @@ func readSecretFromUser(prompt string) ([]byte, error) {
 // vars are missing (e.g. this process was spawned by an MCP host that
 // doesn't propagate them).
 func linuxDesktopEnv() map[string]string {
-	keys := []string{"DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"}
+	keys := []string{"DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"}
 	env := make(map[string]string, len(keys))
 	for _, k := range keys {
 		env[k] = os.Getenv(k)
@@ -1199,10 +1199,26 @@ func readSecretTTY(prompt string) ([]byte, error) {
 	}
 
 	fmt.Fprint(tty, "\n[pty-mcp] "+prompt)
-	secret, err := term.ReadPassword(int(tty.Fd()))
-	fmt.Fprintln(tty)
-	if err != nil {
-		return nil, fmt.Errorf("read secret: %w", err)
+
+	type result struct {
+		secret []byte
+		err    error
 	}
-	return secret, nil
+	ch := make(chan result, 1)
+	go func() {
+		secret, err := term.ReadPassword(int(tty.Fd()))
+		ch <- result{secret, err}
+	}()
+
+	select {
+	case r := <-ch:
+		fmt.Fprintln(tty)
+		if r.err != nil {
+			return nil, fmt.Errorf("read secret: %w", r.err)
+		}
+		return r.secret, nil
+	case <-time.After(guiDialogTimeout):
+		// Closing tty unblocks the ReadPassword syscall in the goroutine above.
+		return nil, fmt.Errorf("timed out waiting for secret input on /dev/tty")
+	}
 }
