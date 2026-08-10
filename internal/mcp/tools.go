@@ -1016,6 +1016,8 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 //  3. Linux + $DISPLAY + zenity → zenity --password
 //  4. Linux + $DISPLAY + kdialog → kdialog --password
 //  5. Fallback    → /dev/tty (works in plain terminals, not inside TUI)
+const guiDialogTimeout = 90 * time.Second
+
 func readSecretFromUser(prompt string) ([]byte, error) {
 	switch runtime.GOOS {
 	case "darwin":
@@ -1028,20 +1030,80 @@ func readSecretFromUser(prompt string) ([]byte, error) {
 				return secret, nil
 			}
 		}
-		if os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" {
+		// MCP hosts (e.g. codex, some Claude Code launch paths) often spawn
+		// pty-mcp with a stripped-down environment that drops DISPLAY/
+		// WAYLAND_DISPLAY even though the operator has a real graphical
+		// session. Fall back to querying the user's systemd session for
+		// these before concluding no GUI is available.
+		env := linuxDesktopEnv()
+		if env["DISPLAY"] != "" || env["WAYLAND_DISPLAY"] != "" {
 			if _, err := exec.LookPath("zenity"); err == nil {
-				if secret, err := readSecretZenity(prompt); err == nil {
+				if secret, err := readSecretZenity(prompt, env); err == nil {
 					return secret, nil
 				}
 			}
 			if _, err := exec.LookPath("kdialog"); err == nil {
-				if secret, err := readSecretKdialog(prompt); err == nil {
+				if secret, err := readSecretKdialog(prompt, env); err == nil {
 					return secret, nil
 				}
 			}
 		}
 	}
 	return readSecretTTY(prompt)
+}
+
+// linuxDesktopEnv returns the display-related environment variables needed
+// to launch a GUI dialog, preferring this process's own environment but
+// falling back to the user's systemd --user session environment when those
+// vars are missing (e.g. this process was spawned by an MCP host that
+// doesn't propagate them).
+func linuxDesktopEnv() map[string]string {
+	keys := []string{"DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"}
+	env := make(map[string]string, len(keys))
+	for _, k := range keys {
+		env[k] = os.Getenv(k)
+	}
+	if env["DISPLAY"] != "" || env["WAYLAND_DISPLAY"] != "" {
+		return env
+	}
+
+	// systemctl --user needs XDG_RUNTIME_DIR (or DBUS_SESSION_BUS_ADDRESS) to
+	// find the user bus; an MCP host that strips the environment drops this
+	// too, so default it to systemd's well-known path before querying.
+	if env["XDG_RUNTIME_DIR"] == "" {
+		env["XDG_RUNTIME_DIR"] = fmt.Sprintf("/run/user/%d", os.Getuid())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "show-environment")
+	cmd.Env = dialogEnv(env)
+	out, err := cmd.Output()
+	if err != nil {
+		return env
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		if _, wanted := env[k]; wanted {
+			env[k] = v
+		}
+	}
+	return env
+}
+
+// dialogEnv builds the environment for a GUI dialog subprocess: this
+// process's environment plus the (possibly recovered) display vars.
+func dialogEnv(extra map[string]string) []string {
+	env := os.Environ()
+	for k, v := range extra {
+		if v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }
 
 func isWSL2() bool {
@@ -1088,17 +1150,25 @@ func readSecretOsascript(prompt string) ([]byte, error) {
 	return []byte(result[len(prefix):]), nil
 }
 
-func readSecretZenity(prompt string) ([]byte, error) {
+func readSecretZenity(prompt string, env map[string]string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout)
+	defer cancel()
 	// --no-markup disables Pango markup processing in the prompt text.
-	out, err := exec.Command("zenity", "--password", "--title=pty-mcp", "--no-markup", "--text="+prompt).Output()
+	cmd := exec.CommandContext(ctx, "zenity", "--password", "--title=pty-mcp", "--no-markup", "--text="+prompt)
+	cmd.Env = dialogEnv(env)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
 	return []byte(strings.TrimRight(string(out), "\n")), nil
 }
 
-func readSecretKdialog(prompt string) ([]byte, error) {
-	out, err := exec.Command("kdialog", "--password", prompt, "--title", "pty-mcp").Output()
+func readSecretKdialog(prompt string, env map[string]string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kdialog", "--password", prompt, "--title", "pty-mcp")
+	cmd.Env = dialogEnv(env)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
@@ -1129,10 +1199,26 @@ func readSecretTTY(prompt string) ([]byte, error) {
 	}
 
 	fmt.Fprint(tty, "\n[pty-mcp] "+prompt)
-	secret, err := term.ReadPassword(int(tty.Fd()))
-	fmt.Fprintln(tty)
-	if err != nil {
-		return nil, fmt.Errorf("read secret: %w", err)
+
+	type result struct {
+		secret []byte
+		err    error
 	}
-	return secret, nil
+	ch := make(chan result, 1)
+	go func() {
+		secret, err := term.ReadPassword(int(tty.Fd()))
+		ch <- result{secret, err}
+	}()
+
+	select {
+	case r := <-ch:
+		fmt.Fprintln(tty)
+		if r.err != nil {
+			return nil, fmt.Errorf("read secret: %w", r.err)
+		}
+		return r.secret, nil
+	case <-time.After(guiDialogTimeout):
+		// Closing tty unblocks the ReadPassword syscall in the goroutine above.
+		return nil, fmt.Errorf("timed out waiting for secret input on /dev/tty")
+	}
 }
