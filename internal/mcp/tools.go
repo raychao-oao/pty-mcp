@@ -1125,7 +1125,13 @@ func readSecretPowerShell(prompt string) ([]byte, error) {
 		`$cred = Get-Credential -UserName "secret" -Message '%s'; $cred.GetNetworkCredential().Password`,
 		escaped,
 	)
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-Command", cmdStr).Output()
+	// Get-Credential has no native timeout; bound it the same way as the
+	// other GUI dialogs so an unanswered prompt can't block the
+	// single-threaded MCP server loop forever. Killing powershell.exe also
+	// closes the dialog window it owns.
+	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", cmdStr).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -1133,21 +1139,41 @@ func readSecretPowerShell(prompt string) ([]byte, error) {
 }
 
 func readSecretOsascript(prompt string) ([]byte, error) {
-	// Pass prompt via environment variable to avoid AppleScript string injection.
-	script := `tell application "System Events" to display dialog (system attribute "PTY_MCP_PROMPT") with hidden answer default answer "" buttons {"OK"} default button "OK"`
-	cmd := exec.Command("osascript", "-e", script)
+	// "giving up after" makes the dialog self-dismiss if the operator never
+	// responds; without it this call (and the single-threaded MCP server
+	// loop that invokes it synchronously) blocks forever.
+	script := fmt.Sprintf(
+		`tell application "System Events" to display dialog (system attribute "PTY_MCP_PROMPT") with hidden answer default answer "" buttons {"OK"} default button "OK" giving up after %d`,
+		int(guiDialogTimeout.Seconds()),
+	)
+	// Backstop in case the dialog itself never appears (e.g. blocked on an
+	// Accessibility/Automation permission prompt that "giving up after" can't reach).
+	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout+5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 	cmd.Env = append(os.Environ(), "PTY_MCP_PROMPT="+prompt)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-	// Output: "button returned:OK, text returned:<secret>\n"
 	result := strings.TrimSpace(string(out))
+	// "gave up" is always the trailing record field appended by AppleScript
+	// itself, never part of the entered secret — check the suffix, not
+	// Contains, so a secret whose own text happens to include this phrase
+	// isn't mistaken for a timeout.
+	if strings.HasSuffix(result, "gave up:true") {
+		return nil, fmt.Errorf("timed out waiting for secret input in GUI dialog")
+	}
+	// Output: "button returned:OK, text returned:<secret>, gave up:false"
 	const prefix = "button returned:OK, text returned:"
 	if !strings.HasPrefix(result, prefix) {
 		return nil, fmt.Errorf("osascript: unexpected output: %s", result)
 	}
-	return []byte(result[len(prefix):]), nil
+	text := result[len(prefix):]
+	if idx := strings.LastIndex(text, ", gave up:"); idx >= 0 {
+		text = text[:idx]
+	}
+	return []byte(text), nil
 }
 
 func readSecretZenity(prompt string, env map[string]string) ([]byte, error) {
@@ -1182,9 +1208,11 @@ func readSecretTTY(prompt string) ([]byte, error) {
 	}
 	defer tty.Close()
 
-	// Restore terminal echo if we are interrupted by a signal.
-	// Close sigCh after signal.Stop to unblock the goroutine on normal completion.
-	if oldState, err := term.GetState(int(tty.Fd())); err == nil {
+	// Restore terminal echo if we are interrupted by a signal, or if we time
+	// out below. Captured once here because ReadPassword's own deferred
+	// Restore runs too late in the timeout case (see below).
+	oldState, hasState := term.GetState(int(tty.Fd()))
+	if hasState == nil {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
@@ -1218,7 +1246,14 @@ func readSecretTTY(prompt string) ([]byte, error) {
 		}
 		return r.secret, nil
 	case <-time.After(guiDialogTimeout):
-		// Closing tty unblocks the ReadPassword syscall in the goroutine above.
+		// Restore the terminal BEFORE closing tty (deferred above): once the
+		// fd is closed, ReadPassword's own deferred Restore call runs on a
+		// dead fd and silently fails, leaving the terminal stuck in
+		// raw/no-echo mode. Closing tty (via the defer) still runs after
+		// this and is what unblocks the ReadPassword syscall in the goroutine.
+		if hasState == nil {
+			term.Restore(int(tty.Fd()), oldState) //nolint:errcheck
+		}
 		return nil, fmt.Errorf("timed out waiting for secret input on /dev/tty")
 	}
 }
