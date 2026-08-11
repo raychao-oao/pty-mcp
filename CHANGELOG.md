@@ -2,6 +2,23 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.5] - 2026-08-11
+
+### Fixed
+- `send_secret`/`prepare_secret` no longer cascade through every GUI dialog fallback (and finally `/dev/tty`, hijacking whatever terminal the AI host is running in) when the operator simply never responds. A genuine timeout now returns immediately instead of falling through to the next platform's dialog. `guiDialogTimeout` reduced from 90s to 60s, so the worst case is now a single bounded 60s wait instead of up to ~180s across stages.
+
+## [v0.11.4] - 2026-08-11
+
+### Fixed
+- `readSecretTTY`'s timeout path closed `/dev/tty` to unblock the blocked password read, but `term.ReadPassword`'s own deferred terminal-state restore only ran after that close — on an already-dead fd, silently failing and leaving the terminal stuck in raw/no-echo mode until the operator ran `stty sane`. The terminal is now explicitly restored before the fd is closed.
+- `readSecretOsascript` (macOS) and `readSecretPowerShell` (WSL2) had no timeout at all, unlike the zenity/kdialog/tty paths. Since pty-mcp processes MCP requests on a single-threaded synchronous loop, an unanswered dialog on either platform blocked the entire server, not just the pending secret call. Both are now bounded by `guiDialogTimeout`.
+
+## [v0.11.3] - 2026-08-10
+
+### Fixed
+- GUI secret dialogs (`send_secret`/`prepare_secret`) silently failed to appear on Linux when pty-mcp was launched by an MCP host (e.g. codex CLI) that spawns child processes with a stripped-down environment lacking `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY`, even though the operator had a real graphical session. These are now recovered via `systemctl --user show-environment` before concluding no GUI is available.
+- The `/dev/tty` fallback used after a GUI dialog failure had no timeout, so an operator who never responded left the tool call — and the pending PTY session — blocked indefinitely. Bounded to `guiDialogTimeout` (90s at the time).
+
 ## [v0.11.2] - 2026-05-21
 
 ### Fixed
