@@ -2,6 +2,11 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.6] - 2026-08-11
+
+### Fixed
+- `plugin/.claude-plugin/plugin.json` was never included in the release version-sync list and had been stuck at `0.11.2` since at least v0.7.2. `claude plugin update` reads this file's version (not `marketplace.json`), so it silently reported "already at latest" on every release since — the CLI never actually detected an update was available. Now kept in sync as the 4th version file on every release.
+
 ## [v0.11.5] - 2026-08-11
 
 ### Fixed
