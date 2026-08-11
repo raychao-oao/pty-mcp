@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1016,18 +1017,36 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 //  3. Linux + $DISPLAY + zenity → zenity --password
 //  4. Linux + $DISPLAY + kdialog → kdialog --password
 //  5. Fallback    → /dev/tty (works in plain terminals, not inside TUI)
-const guiDialogTimeout = 90 * time.Second
+//
+// Each step is bounded by guiDialogTimeout. A step that fails for an
+// environment reason (binary missing, dialog crashed) falls through to the
+// next step, but a step the operator genuinely never answered (errSecretTimeout)
+// returns immediately instead of cascading — the pty-mcp server processes MCP
+// requests on a single synchronous loop, so every additional fallback attempt
+// (especially /dev/tty, which hijacks whatever terminal the AI host itself is
+// running in) is more time the whole session appears hung to the operator.
+const guiDialogTimeout = 60 * time.Second
+
+var errSecretTimeout = errors.New("timed out waiting for secret input: operator did not respond")
 
 func readSecretFromUser(prompt string) ([]byte, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		if secret, err := readSecretOsascript(prompt); err == nil {
+		secret, err := readSecretOsascript(prompt)
+		if err == nil {
 			return secret, nil
+		}
+		if errors.Is(err, errSecretTimeout) {
+			return nil, err
 		}
 	case "linux":
 		if isWSL2() {
-			if secret, err := readSecretPowerShell(prompt); err == nil {
+			secret, err := readSecretPowerShell(prompt)
+			if err == nil {
 				return secret, nil
+			}
+			if errors.Is(err, errSecretTimeout) {
+				return nil, err
 			}
 		}
 		// MCP hosts (e.g. codex, some Claude Code launch paths) often spawn
@@ -1038,13 +1057,21 @@ func readSecretFromUser(prompt string) ([]byte, error) {
 		env := linuxDesktopEnv()
 		if env["DISPLAY"] != "" || env["WAYLAND_DISPLAY"] != "" {
 			if _, err := exec.LookPath("zenity"); err == nil {
-				if secret, err := readSecretZenity(prompt, env); err == nil {
+				secret, err := readSecretZenity(prompt, env)
+				if err == nil {
 					return secret, nil
+				}
+				if errors.Is(err, errSecretTimeout) {
+					return nil, err
 				}
 			}
 			if _, err := exec.LookPath("kdialog"); err == nil {
-				if secret, err := readSecretKdialog(prompt, env); err == nil {
+				secret, err := readSecretKdialog(prompt, env)
+				if err == nil {
 					return secret, nil
+				}
+				if errors.Is(err, errSecretTimeout) {
+					return nil, err
 				}
 			}
 		}
@@ -1133,6 +1160,9 @@ func readSecretPowerShell(prompt string) ([]byte, error) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", cmdStr).Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errSecretTimeout
+		}
 		return nil, err
 	}
 	return []byte(strings.TrimRight(string(out), "\r\n")), nil
@@ -1154,6 +1184,9 @@ func readSecretOsascript(prompt string) ([]byte, error) {
 	cmd.Env = append(os.Environ(), "PTY_MCP_PROMPT="+prompt)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errSecretTimeout
+		}
 		return nil, err
 	}
 	result := strings.TrimSpace(string(out))
@@ -1162,7 +1195,7 @@ func readSecretOsascript(prompt string) ([]byte, error) {
 	// Contains, so a secret whose own text happens to include this phrase
 	// isn't mistaken for a timeout.
 	if strings.HasSuffix(result, "gave up:true") {
-		return nil, fmt.Errorf("timed out waiting for secret input in GUI dialog")
+		return nil, errSecretTimeout
 	}
 	// Output: "button returned:OK, text returned:<secret>, gave up:false"
 	const prefix = "button returned:OK, text returned:"
@@ -1184,6 +1217,9 @@ func readSecretZenity(prompt string, env map[string]string) ([]byte, error) {
 	cmd.Env = dialogEnv(env)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errSecretTimeout
+		}
 		return nil, err
 	}
 	return []byte(strings.TrimRight(string(out), "\n")), nil
@@ -1196,6 +1232,9 @@ func readSecretKdialog(prompt string, env map[string]string) ([]byte, error) {
 	cmd.Env = dialogEnv(env)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errSecretTimeout
+		}
 		return nil, err
 	}
 	return []byte(strings.TrimRight(string(out), "\n")), nil
@@ -1254,6 +1293,6 @@ func readSecretTTY(prompt string) ([]byte, error) {
 		if hasState == nil {
 			term.Restore(int(tty.Fd()), oldState) //nolint:errcheck
 		}
-		return nil, fmt.Errorf("timed out waiting for secret input on /dev/tty")
+		return nil, errSecretTimeout
 	}
 }
