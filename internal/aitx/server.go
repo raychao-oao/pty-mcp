@@ -3,6 +3,7 @@ package aitx
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -166,7 +167,7 @@ func (srv *Server) sendInput(req *Request) Response {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
 
-	output, isComplete := s.ReadScreen(p.TimeoutMs)
+	output, isComplete := s.ReadScreen(context.Background(), p.TimeoutMs)
 	return Response{ID: req.ID, Result: OutputResult{
 		Output:     output,
 		IsAlive:    s.IsAlive(),
@@ -189,7 +190,7 @@ func (srv *Server) readOutput(req *Request) Response {
 	if timeoutMs <= 0 {
 		timeoutMs = 5000
 	}
-	output, isComplete := s.ReadScreen(timeoutMs)
+	output, isComplete := s.ReadScreen(context.Background(), timeoutMs)
 	return Response{ID: req.ID, Result: OutputResult{
 		Output:     output,
 		IsAlive:    s.IsAlive(),
@@ -224,7 +225,7 @@ func (srv *Server) sendControl(req *Request) Response {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
 
-	output, isComplete := s.ReadScreen(5000)
+	output, isComplete := s.ReadScreen(context.Background(), 5000)
 	return Response{ID: req.ID, Result: OutputResult{
 		Output:     output,
 		IsAlive:    s.IsAlive(),
@@ -247,7 +248,7 @@ func (srv *Server) sendRaw(req *Request) Response {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
 
-	output, isComplete := s.ReadScreen(p.TimeoutMs)
+	output, isComplete := s.ReadScreen(context.Background(), p.TimeoutMs)
 	return Response{ID: req.ID, Result: OutputResult{
 		Output:     output,
 		IsAlive:    s.IsAlive(),

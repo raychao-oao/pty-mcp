@@ -51,6 +51,7 @@ type Handler struct {
 	audit           *audit.Client // nil if audit is not configured
 	credStore       *credentialStore
 	identityKeyPath string
+	identityKeyMu   sync.Mutex // serializes first-time identity key generation
 }
 
 func NewHandler(mgr *session.Manager, auditClient *audit.Client) *Handler {
@@ -77,7 +78,7 @@ type CreateSSHParams struct {
 	LogMaxFiles  int    `json:"log_max_files"`    // max number of rotated log files to keep (default: 3)
 }
 
-func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
+func (h *Handler) CreateSSHSession(ctx context.Context, params json.RawMessage) (any, error) {
 	var p CreateSSHParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -116,9 +117,23 @@ func (h *Handler) CreateSSHSession(params json.RawMessage) (any, error) {
 		}
 		return nil, err
 	}
+	if ctx.Err() != nil {
+		// Caller gave up while the (possibly slow) SSH handshake was still
+		// in flight. The session came up successfully, but its response is
+		// about to be suppressed — closing it now instead of registering it
+		// avoids an orphaned session nobody can discover or close later.
+		s.Close()
+		return nil, ctx.Err()
+	}
 	target := fmt.Sprintf("%s@%s", p.User, p.Host)
 	if err := h.mgr.Add(s, target); err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		// Narrows (can't fully close) the window between the check above and
+		// Add() actually registering the session.
+		h.mgr.Close(s.ID()) //nolint:errcheck
+		return nil, ctx.Err()
 	}
 	return map[string]string{"session_id": s.ID(), "type": sessionType, "target": target}, nil
 }
@@ -133,7 +148,7 @@ type ListRemoteParams struct {
 	Status     string `json:"status"` // filter by status: "running", "idle", etc.
 }
 
-func (h *Handler) ListRemoteSessions(params json.RawMessage) (any, error) {
+func (h *Handler) ListRemoteSessions(ctx context.Context, params json.RawMessage) (any, error) {
 	var p ListRemoteParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -169,7 +184,7 @@ type CreateLocalParams struct {
 	LogMaxFiles  int    `json:"log_max_files"` // max number of rotated log files to keep (default: 3)
 }
 
-func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
+func (h *Handler) CreateLocalSession(ctx context.Context, params json.RawMessage) (any, error) {
 	var p CreateLocalParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -188,8 +203,16 @@ func (h *Handler) CreateLocalSession(params json.RawMessage) (any, error) {
 		}
 		return nil, err
 	}
+	if ctx.Err() != nil {
+		s.Close()
+		return nil, ctx.Err()
+	}
 	if err := h.mgr.Add(s, p.Command); err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		h.mgr.Close(s.ID()) //nolint:errcheck
+		return nil, ctx.Err()
 	}
 	return map[string]string{"session_id": s.ID(), "type": "local", "command": p.Command}, nil
 }
@@ -202,7 +225,7 @@ type CreateSerialParams struct {
 	LogMaxFiles  int    `json:"log_max_files"` // max number of rotated log files to keep (default: 3)
 }
 
-func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
+func (h *Handler) CreateSerialSession(ctx context.Context, params json.RawMessage) (any, error) {
 	var p CreateSerialParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -218,9 +241,17 @@ func (h *Handler) CreateSerialSession(params json.RawMessage) (any, error) {
 		}
 		return nil, err
 	}
+	if ctx.Err() != nil {
+		s.Close()
+		return nil, ctx.Err()
+	}
 	target := fmt.Sprintf("%s@%d", p.Device, p.BaudRate)
 	if err := h.mgr.Add(s, target); err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		h.mgr.Close(s.ID()) //nolint:errcheck
+		return nil, ctx.Err()
 	}
 	return map[string]string{"session_id": s.ID(), "type": "serial", "target": target}, nil
 }
@@ -234,7 +265,7 @@ type SendInputParams struct {
 	WaitForTimeout float64 `json:"wait_for_timeout"` // timeout in seconds for wait_for (default: 10, max: 600)
 }
 
-func (h *Handler) SendInput(params json.RawMessage) (any, error) {
+func (h *Handler) SendInput(ctx context.Context, params json.RawMessage) (any, error) {
 	var p SendInputParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -249,6 +280,10 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
 
 	// Audit phase 1: record command before execution.
 	// auditOutput is set by each code path below; the deferred closure sends phase 2.
@@ -294,7 +329,7 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 				return nil, err
 			}
 		}
-		output, isComplete := rs.ReadScreen(p.TimeoutMs)
+		output, isComplete := rs.ReadScreen(ctx, p.TimeoutMs)
 		auditOutput = output
 		return map[string]any{"output": output, "cursor": rs.Buffer().Snapshot(), "is_alive": rs.IsAlive(), "is_complete": isComplete}, nil
 	}
@@ -318,11 +353,11 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 		if wfTimeout > 600 {
 			wfTimeout = 600
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wfTimeout*float64(time.Second)))
+		waitCtx, cancel := context.WithTimeout(ctx, time.Duration(wfTimeout*float64(time.Second)))
 		defer cancel()
-		go s.PollRemote(ctx)
+		go s.PollRemote(waitCtx)
 
-		result := waitForPattern(s.Buffer(), s.IsAlive, WaitForParams{
+		result := waitForPattern(waitCtx, s.Buffer(), s.IsAlive, WaitForParams{
 			WaitFor:      p.WaitFor,
 			Timeout:      time.Duration(wfTimeout * float64(time.Second)),
 			ContextLines: 0,
@@ -338,7 +373,7 @@ func (h *Handler) SendInput(params json.RawMessage) (any, error) {
 		return result, nil
 	}
 
-	output, isComplete := s.ReadScreen(p.TimeoutMs)
+	output, isComplete := s.ReadScreen(ctx, p.TimeoutMs)
 	h.maybeAutoSendSecret(s, output)
 	auditOutput = output
 	cursorEnd := s.Buffer().Snapshot()
@@ -478,7 +513,7 @@ func clampInt(v, lo, hi int) int {
 	return v
 }
 
-func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForParams) WaitForResult {
+func waitForPattern(ctx context.Context, rb *buffer.RingBuffer, isAlive func() bool, params WaitForParams) WaitForResult {
 	// 1. Compile regex, fallback to plain text on error
 	re, err := regexp.Compile(params.WaitFor)
 	usePlainMatch := (err != nil)
@@ -486,9 +521,6 @@ func waitForPattern(rb *buffer.RingBuffer, isAlive func() bool, params WaitForPa
 	if usePlainMatch {
 		warning = "invalid regex, falling back to plain text match"
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), params.Timeout)
-	defer cancel()
 
 	// Start from markSnapshot — where ReadScreen last left off.
 	// Only match "unread" output, not stale data from earlier commands.
@@ -691,13 +723,21 @@ func tailFromCollected(collected []string, n int) string {
 	return strings.Join(collected[start:], "\n")
 }
 
-func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
+func (h *Handler) ReadOutput(ctx context.Context, params json.RawMessage) (any, error) {
 	var p ReadOutputParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	s, err := h.mgr.Get(p.SessionID)
 	if err != nil {
+		return nil, err
+	}
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
+	// Re-fetch: the session could have been closed while queued for the lock.
+	if s, err = h.mgr.Get(p.SessionID); err != nil {
 		return nil, err
 	}
 
@@ -714,11 +754,11 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 		tailLines := clampInt(p.TailLines, 0, 100)
 
 		// Start remote polling if needed
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec*float64(time.Second)))
+		waitCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec*float64(time.Second)))
 		defer cancel()
-		go s.PollRemote(ctx)
+		go s.PollRemote(waitCtx)
 
-		result := waitForPattern(s.Buffer(), s.IsAlive, WaitForParams{
+		result := waitForPattern(waitCtx, s.Buffer(), s.IsAlive, WaitForParams{
 			WaitFor:      p.WaitFor,
 			Timeout:      time.Duration(timeoutSec * float64(time.Second)),
 			ContextLines: contextLines,
@@ -761,7 +801,7 @@ func (h *Handler) ReadOutput(params json.RawMessage) (any, error) {
 		}
 		timeoutMs = ms
 	}
-	output, isComplete := s.ReadScreen(timeoutMs)
+	output, isComplete := s.ReadScreen(ctx, timeoutMs)
 	return map[string]any{"output": output, "cursor": s.Buffer().Snapshot(), "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
@@ -785,7 +825,7 @@ var controlKeys = map[string]string{
 	"right":  "\x1b[C",
 }
 
-func (h *Handler) SendControl(params json.RawMessage) (any, error) {
+func (h *Handler) SendControl(ctx context.Context, params json.RawMessage) (any, error) {
 	var p SendControlParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -798,10 +838,18 @@ func (h *Handler) SendControl(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
+	// Re-fetch: the session could have been closed while queued for the lock.
+	if s, err = h.mgr.Get(p.SessionID); err != nil {
+		return nil, err
+	}
 	if err := s.WriteRaw(seq); err != nil {
 		return nil, err
 	}
-	output, isComplete := s.ReadScreen(5000)
+	output, isComplete := s.ReadScreen(ctx, 5000)
 	return map[string]any{"output": output, "cursor": s.Buffer().Snapshot(), "is_alive": s.IsAlive(), "is_complete": isComplete}, nil
 }
 
@@ -813,7 +861,7 @@ func supportedKeys() []string {
 	return keys
 }
 
-func (h *Handler) GetSessionState(params json.RawMessage) (any, error) {
+func (h *Handler) GetSessionState(ctx context.Context, params json.RawMessage) (any, error) {
 	var p SessionIDParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -845,26 +893,46 @@ func (h *Handler) GetSessionState(params json.RawMessage) (any, error) {
 	return result, nil
 }
 
-func (h *Handler) ListSessions(_ json.RawMessage) (any, error) {
+func (h *Handler) ListSessions(ctx context.Context, _ json.RawMessage) (any, error) {
 	return h.mgr.List(), nil
 }
 
-func (h *Handler) CloseSession(params json.RawMessage) (any, error) {
+func (h *Handler) CloseSession(ctx context.Context, params json.RawMessage) (any, error) {
 	var p SessionIDParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
+	// Validate existence before allocating a lock — sessionLockChan entries
+	// are permanent (see its doc comment), so an unknown id must never reach
+	// LockSession or a client probing with garbage ids could grow the lock
+	// map without bound.
+	if _, err := h.mgr.Get(p.SessionID); err != nil {
+		return nil, err
+	}
+	// Wait for any in-flight operation on this session to finish before tearing
+	// it down, so a concurrent Write/Read never races a Close.
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
 	if err := h.mgr.Close(p.SessionID); err != nil {
 		return nil, err
 	}
 	return map[string]bool{"success": true}, nil
 }
 
-func (h *Handler) DetachSession(params json.RawMessage) (any, error) {
+func (h *Handler) DetachSession(ctx context.Context, params json.RawMessage) (any, error) {
 	var p SessionIDParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
+	if _, err := h.mgr.Get(p.SessionID); err != nil {
+		return nil, err
+	}
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
 	if err := h.mgr.Detach(p.SessionID); err != nil {
 		return nil, err
 	}
@@ -877,7 +945,7 @@ type ResizeSessionParams struct {
 	Cols      int    `json:"cols"`
 }
 
-func (h *Handler) ResizeSession(params json.RawMessage) (any, error) {
+func (h *Handler) ResizeSession(ctx context.Context, params json.RawMessage) (any, error) {
 	var p ResizeSessionParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -890,6 +958,14 @@ func (h *Handler) ResizeSession(params json.RawMessage) (any, error) {
 	}
 	s, err := h.mgr.Get(p.SessionID)
 	if err != nil {
+		return nil, err
+	}
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
+	// Re-fetch: the session could have been closed while queued for the lock.
+	if s, err = h.mgr.Get(p.SessionID); err != nil {
 		return nil, err
 	}
 	if err := s.Resize(p.Rows, p.Cols); err != nil {
@@ -942,11 +1018,27 @@ type PrepareSecretParams struct {
 	LineEnding string `json:"line_ending"`
 }
 
-func (h *Handler) PrepareSecret(params json.RawMessage) (any, error) {
+func (h *Handler) PrepareSecret(ctx context.Context, params json.RawMessage) (any, error) {
 	var p PrepareSecretParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
+	if _, err := h.mgr.Get(p.SessionID); err != nil {
+		return nil, err
+	}
+	// Share the same per-session lock as send_secret: without it, an
+	// overlapping prepare_secret and send_secret on the same session could
+	// interleave — send_secret prompts and writes its own secret, then
+	// prepare_secret's later SetPendingSecret stages a value for whatever
+	// unrelated prompt comes next, silently auto-sending it there.
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
+	// Re-validate: the session could have been closed while queued for the
+	// lock above (close_session takes the same lock, but may have already
+	// finished by the time we get it). Don't stage a secret for a session
+	// id that's gone and will never be reused.
 	if _, err := h.mgr.Get(p.SessionID); err != nil {
 		return nil, err
 	}
@@ -958,9 +1050,14 @@ func (h *Handler) PrepareSecret(params json.RawMessage) (any, error) {
 	if lineEnding == "" {
 		lineEnding = "\r"
 	}
-	secret, err := readSecretFromUser(prompt)
+	secret, err := readSecretFromUser(ctx, prompt)
 	if err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		// Caller gave up while the operator was still typing — don't stage
+		// a secret nobody asked for anymore to be auto-sent later.
+		return nil, ctx.Err()
 	}
 	h.mgr.SetPendingSecret(p.SessionID, session.PendingSecret{Secret: secret, LineEnding: lineEnding})
 	return map[string]any{"success": true, "buffered": true}, nil
@@ -971,13 +1068,22 @@ type SendSecretParams struct {
 	Prompt    string `json:"prompt"`
 }
 
-func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
+func (h *Handler) SendSecret(ctx context.Context, params json.RawMessage) (any, error) {
 	var p SendSecretParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
 	}
 	s, err := h.mgr.Get(p.SessionID)
 	if err != nil {
+		return nil, err
+	}
+	if err := h.mgr.LockSession(ctx, p.SessionID); err != nil {
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(p.SessionID)
+	// Re-fetch: the session could have been closed while queued for the
+	// lock above (close_session takes the same lock).
+	if s, err = h.mgr.Get(p.SessionID); err != nil {
 		return nil, err
 	}
 
@@ -994,9 +1100,15 @@ func (h *Handler) SendSecret(params json.RawMessage) (any, error) {
 		prompt = "Enter secret: "
 	}
 
-	secret, err := readSecretFromUser(prompt)
+	secret, err := readSecretFromUser(ctx, prompt)
 	if err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		// The caller gave up while the operator was still typing. The
+		// response is about to be suppressed either way, but don't let a
+		// secret entered for an abandoned call land in the PTY session.
+		return nil, ctx.Err()
 	}
 
 	if err := s.WriteRaw(string(secret) + "\r"); err != nil {
@@ -1029,23 +1141,38 @@ const guiDialogTimeout = 60 * time.Second
 
 var errSecretTimeout = errors.New("timed out waiting for secret input: operator did not respond")
 
-func readSecretFromUser(prompt string) ([]byte, error) {
+// secretPromptSem serializes interactive secret prompting (GUI dialog or
+// /dev/tty) server-wide. Different sessions' tool calls now run concurrently,
+// but there is only one operator and one terminal/screen — two simultaneous
+// prompts could race on the same /dev/tty read or dialog and deliver a
+// secret to the wrong caller. A channel (not sync.Mutex) so acquiring it can
+// be abandoned via ctx if the request is cancelled while queued.
+var secretPromptSem = make(chan struct{}, 1)
+
+func readSecretFromUser(ctx context.Context, prompt string) ([]byte, error) {
+	select {
+	case secretPromptSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-secretPromptSem }()
+
 	switch runtime.GOOS {
 	case "darwin":
-		secret, err := readSecretOsascript(prompt)
+		secret, err := readSecretOsascript(ctx, prompt)
 		if err == nil {
 			return secret, nil
 		}
-		if errors.Is(err, errSecretTimeout) {
+		if errors.Is(err, errSecretTimeout) || errors.Is(err, context.Canceled) {
 			return nil, err
 		}
 	case "linux":
 		if isWSL2() {
-			secret, err := readSecretPowerShell(prompt)
+			secret, err := readSecretPowerShell(ctx, prompt)
 			if err == nil {
 				return secret, nil
 			}
-			if errors.Is(err, errSecretTimeout) {
+			if errors.Is(err, errSecretTimeout) || errors.Is(err, context.Canceled) {
 				return nil, err
 			}
 		}
@@ -1057,26 +1184,26 @@ func readSecretFromUser(prompt string) ([]byte, error) {
 		env := linuxDesktopEnv()
 		if env["DISPLAY"] != "" || env["WAYLAND_DISPLAY"] != "" {
 			if _, err := exec.LookPath("zenity"); err == nil {
-				secret, err := readSecretZenity(prompt, env)
+				secret, err := readSecretZenity(ctx, prompt, env)
 				if err == nil {
 					return secret, nil
 				}
-				if errors.Is(err, errSecretTimeout) {
+				if errors.Is(err, errSecretTimeout) || errors.Is(err, context.Canceled) {
 					return nil, err
 				}
 			}
 			if _, err := exec.LookPath("kdialog"); err == nil {
-				secret, err := readSecretKdialog(prompt, env)
+				secret, err := readSecretKdialog(ctx, prompt, env)
 				if err == nil {
 					return secret, nil
 				}
-				if errors.Is(err, errSecretTimeout) {
+				if errors.Is(err, errSecretTimeout) || errors.Is(err, context.Canceled) {
 					return nil, err
 				}
 			}
 		}
 	}
-	return readSecretTTY(prompt)
+	return readSecretTTY(ctx, prompt)
 }
 
 // linuxDesktopEnv returns the display-related environment variables needed
@@ -1142,7 +1269,24 @@ func isWSL2() bool {
 	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
 }
 
-func readSecretPowerShell(prompt string) ([]byte, error) {
+// classifySecretDialogErr maps a failed GUI dialog subprocess call to the
+// right error: errSecretTimeout if our own guiDialogTimeout elapsed (operator
+// never responded), dialogCtx.Err() (context.Canceled) if the underlying
+// request was cancelled by the caller, or the raw subprocess error otherwise
+// (an environment problem, e.g. the binary is missing — safe for
+// readSecretFromUser to try the next fallback).
+func classifySecretDialogErr(dialogCtx context.Context, err error) error {
+	switch dialogCtx.Err() {
+	case context.DeadlineExceeded:
+		return errSecretTimeout
+	case context.Canceled:
+		return dialogCtx.Err()
+	default:
+		return err
+	}
+}
+
+func readSecretPowerShell(ctx context.Context, prompt string) ([]byte, error) {
 	// Get-Credential pops a standard Windows password dialog (input is masked).
 	// Username field is pre-filled with "secret" and not editable.
 	// stdout returns the plaintext password.
@@ -1153,41 +1297,51 @@ func readSecretPowerShell(prompt string) ([]byte, error) {
 		escaped,
 	)
 	// Get-Credential has no native timeout; bound it the same way as the
-	// other GUI dialogs so an unanswered prompt can't block the
-	// single-threaded MCP server loop forever. Killing powershell.exe also
-	// closes the dialog window it owns.
-	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout)
+	// other GUI dialogs so an unanswered prompt can't block the server
+	// forever. Deriving from ctx (not context.Background()) means the
+	// dialog process is also killed immediately if the request is
+	// cancelled, instead of lingering for up to guiDialogTimeout regardless.
+	// Killing powershell.exe also closes the dialog window it owns.
+	dialogCtx, cancel := context.WithTimeout(ctx, guiDialogTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", cmdStr).Output()
+	out, err := exec.CommandContext(dialogCtx, "powershell.exe", "-NoProfile", "-Command", cmdStr).Output()
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, errSecretTimeout
-		}
-		return nil, err
+		return nil, classifySecretDialogErr(dialogCtx, err)
 	}
 	return []byte(strings.TrimRight(string(out), "\r\n")), nil
 }
 
-func readSecretOsascript(prompt string) ([]byte, error) {
+func readSecretOsascript(ctx context.Context, prompt string) ([]byte, error) {
+	// The prompt used to be passed via the PTY_MCP_PROMPT env var and read
+	// back with `system attribute`, but that AppleScript API decodes the
+	// env var using the legacy system text encoding (not UTF-8), so any
+	// non-ASCII prompt (e.g. Chinese) came out as mojibake in the dialog.
+	// Interpolating the prompt directly into the script text (which osascript
+	// reads as UTF-8) avoids that; escape backslash/quote so it can't break
+	// out of the AppleScript string literal, and collapse newlines since a
+	// dialog prompt is a single line of UI text.
+	escaped := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"\r", " ",
+		"\n", " ",
+	).Replace(prompt)
 	// "giving up after" makes the dialog self-dismiss if the operator never
 	// responds; without it this call (and the single-threaded MCP server
 	// loop that invokes it synchronously) blocks forever.
 	script := fmt.Sprintf(
-		`tell application "System Events" to display dialog (system attribute "PTY_MCP_PROMPT") with hidden answer default answer "" buttons {"OK"} default button "OK" giving up after %d`,
+		`tell application "System Events" to display dialog "%s" with hidden answer default answer "" buttons {"OK"} default button "OK" giving up after %d`,
+		escaped,
 		int(guiDialogTimeout.Seconds()),
 	)
 	// Backstop in case the dialog itself never appears (e.g. blocked on an
 	// Accessibility/Automation permission prompt that "giving up after" can't reach).
-	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout+5*time.Second)
+	dialogCtx, cancel := context.WithTimeout(ctx, guiDialogTimeout+5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
-	cmd.Env = append(os.Environ(), "PTY_MCP_PROMPT="+prompt)
+	cmd := exec.CommandContext(dialogCtx, "osascript", "-e", script)
 	out, err := cmd.Output()
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, errSecretTimeout
-		}
-		return nil, err
+		return nil, classifySecretDialogErr(dialogCtx, err)
 	}
 	result := strings.TrimSpace(string(out))
 	// "gave up" is always the trailing record field appended by AppleScript
@@ -1209,38 +1363,32 @@ func readSecretOsascript(prompt string) ([]byte, error) {
 	return []byte(text), nil
 }
 
-func readSecretZenity(prompt string, env map[string]string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout)
+func readSecretZenity(ctx context.Context, prompt string, env map[string]string) ([]byte, error) {
+	dialogCtx, cancel := context.WithTimeout(ctx, guiDialogTimeout)
 	defer cancel()
 	// --no-markup disables Pango markup processing in the prompt text.
-	cmd := exec.CommandContext(ctx, "zenity", "--password", "--title=pty-mcp", "--no-markup", "--text="+prompt)
+	cmd := exec.CommandContext(dialogCtx, "zenity", "--password", "--title=pty-mcp", "--no-markup", "--text="+prompt)
 	cmd.Env = dialogEnv(env)
 	out, err := cmd.Output()
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, errSecretTimeout
-		}
-		return nil, err
+		return nil, classifySecretDialogErr(dialogCtx, err)
 	}
 	return []byte(strings.TrimRight(string(out), "\n")), nil
 }
 
-func readSecretKdialog(prompt string, env map[string]string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), guiDialogTimeout)
+func readSecretKdialog(ctx context.Context, prompt string, env map[string]string) ([]byte, error) {
+	dialogCtx, cancel := context.WithTimeout(ctx, guiDialogTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "kdialog", "--password", prompt, "--title", "pty-mcp")
+	cmd := exec.CommandContext(dialogCtx, "kdialog", "--password", prompt, "--title", "pty-mcp")
 	cmd.Env = dialogEnv(env)
 	out, err := cmd.Output()
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, errSecretTimeout
-		}
-		return nil, err
+		return nil, classifySecretDialogErr(dialogCtx, err)
 	}
 	return []byte(strings.TrimRight(string(out), "\n")), nil
 }
 
-func readSecretTTY(prompt string) ([]byte, error) {
+func readSecretTTY(ctx context.Context, prompt string) ([]byte, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open /dev/tty: %w", err)
@@ -1294,5 +1442,12 @@ func readSecretTTY(prompt string) ([]byte, error) {
 			term.Restore(int(tty.Fd()), oldState) //nolint:errcheck
 		}
 		return nil, errSecretTimeout
+	case <-ctx.Done():
+		// Request cancelled — same terminal-restore-before-close reasoning
+		// as the timeout case above.
+		if hasState == nil {
+			term.Restore(int(tty.Fd()), oldState) //nolint:errcheck
+		}
+		return nil, ctx.Err()
 	}
 }

@@ -39,8 +39,8 @@ func (s *LocalSession) WriteRaw(data string) error {
 	return s.pty.WriteRaw(data)
 }
 
-func (s *LocalSession) ReadScreen(timeoutMs int) (string, bool) {
-	return s.pty.ReadScreen(timeoutMs)
+func (s *LocalSession) ReadScreen(ctx context.Context, timeoutMs int) (string, bool) {
+	return s.pty.ReadScreen(ctx, timeoutMs)
 }
 
 func (s *LocalSession) IsAlive() bool {

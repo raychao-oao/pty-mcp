@@ -87,7 +87,7 @@ func TestRemoteSession_WriteRaw_CachesOutput(t *testing.T) {
 	}
 
 	// ReadScreen must drain the cache — no extra read_output RPC.
-	out, isComplete := rs.ReadScreen(1000)
+	out, isComplete := rs.ReadScreen(context.Background(), 1000)
 	if out != "^C\n$ " {
 		t.Errorf("ReadScreen output: want %q, got %q", "^C\n$ ", out)
 	}
@@ -125,7 +125,7 @@ func TestRemoteSession_Write_CachesOutput(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	out, _ := rs.ReadScreen(1000)
+	out, _ := rs.ReadScreen(context.Background(), 1000)
 	if out != "hello\n$ " {
 		t.Errorf("ReadScreen output: want %q, got %q", "hello\n$ ", out)
 	}
@@ -153,7 +153,7 @@ func TestRemoteSession_ReadScreen_FallsBackToRPC(t *testing.T) {
 		}}
 	})
 
-	out, _ := rs.ReadScreen(1000)
+	out, _ := rs.ReadScreen(context.Background(), 1000)
 	if out != "fresh\n$ " {
 		t.Errorf("ReadScreen output: want %q, got %q", "fresh\n$ ", out)
 	}
@@ -190,7 +190,7 @@ func TestRemoteSession_WriteRaw_NonControlUsesSendRaw(t *testing.T) {
 		t.Fatalf("WriteRaw(\"y\"): %v", err)
 	}
 
-	out, _ := rs.ReadScreen(1000)
+	out, _ := rs.ReadScreen(context.Background(), 1000)
 	if out != "y\n$ " {
 		t.Errorf("ReadScreen output: want %q, got %q", "y\n$ ", out)
 	}

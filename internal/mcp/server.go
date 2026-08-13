@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/raychao-oao/pty-mcp/internal/session"
 )
@@ -16,18 +19,32 @@ import (
 // Version is set from main via ldflags (-X main.version) forwarded at startup.
 var Version = "dev"
 
+// maxConcurrentToolCalls bounds how many tool calls actually execute at once.
+// Requests beyond this queue on a semaphore acquired inside each request's own
+// goroutine, so the stdin reader is never blocked and can always dispatch new
+// work or process a cancellation notification immediately.
+const maxConcurrentToolCalls = 32
+
+// shutdownGracePeriod bounds how long Serve waits for in-flight requests to
+// finish after stdin closes, before exiting anyway.
+const shutdownGracePeriod = 10 * time.Second
+
+// request.ID and response.ID are kept as raw JSON (not unmarshaled into `any`)
+// so a request's ID round-trips exactly as sent — the MCP/JSON-RPC spec allows
+// both string and number IDs, and converting through Go's `any` (float64 for
+// numbers) can make distinct IDs collide (e.g. the string "1" and the number 1).
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      any             `json:"id"`
+	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params"`
 }
 
 type response struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      any       `json:"id"`
-	Result  any       `json:"result,omitempty"`
-	Error   *rpcError `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type rpcError struct {
@@ -183,15 +200,117 @@ var toolsList = []map[string]any{
 	}},
 }
 
+// inflightEntry tracks one in-flight request's cancel func and whether it has
+// been cancelled. Guarded by inflightRegistry.mu (not its own lock) so that
+// "mark cancelled" and "decide whether to send a response" linearize.
+type inflightEntry struct {
+	cancel    context.CancelFunc
+	cancelled bool
+}
+
+// inflightRegistry maps a request's raw JSON id (as a string key) to the
+// entries currently processing it. A slice per key (not a single entry)
+// defensively handles a client reusing an id before the prior request with
+// that id finished — cancel() cancels all of them, finish() pops one.
+type inflightRegistry struct {
+	mu      sync.Mutex
+	entries map[string][]*inflightEntry
+}
+
+func newInflightRegistry() *inflightRegistry {
+	return &inflightRegistry{entries: make(map[string][]*inflightEntry)}
+}
+
+func (r *inflightRegistry) add(key string, cancel context.CancelFunc) *inflightEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e := &inflightEntry{cancel: cancel}
+	r.entries[key] = append(r.entries[key], e)
+	return e
+}
+
+// cancel marks every in-flight entry for key as cancelled and invokes its
+// cancel func. No-op if the id is unknown (already finished, or never existed).
+func (r *inflightRegistry) cancel(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.entries[key] {
+		e.cancelled = true
+		e.cancel()
+	}
+}
+
+// finish removes one entry for key and reports whether it was cancelled — the
+// caller must not send a response for the request in that case, per the MCP
+// cancellation notification spec.
+func (r *inflightRegistry) finish(key string, e *inflightEntry) (wasCancelled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entries := r.entries[key]
+	for i, cand := range entries {
+		if cand == e {
+			entries = append(entries[:i], entries[i+1:]...)
+			break
+		}
+	}
+	if len(entries) == 0 {
+		delete(r.entries, key)
+	} else {
+		r.entries[key] = entries
+	}
+	return e.cancelled
+}
+
+type cancelParams struct {
+	RequestID json.RawMessage `json:"requestId"`
+	ID        json.RawMessage `json:"id"` // legacy alias accepted defensively
+}
+
+func handleCancellation(inflight *inflightRegistry, raw json.RawMessage) {
+	var p cancelParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		log.Printf("cancel notification: parse error: %v", err)
+		return
+	}
+	key := string(p.RequestID)
+	if len(p.RequestID) == 0 {
+		key = string(p.ID)
+	}
+	if key == "" || key == "null" {
+		return
+	}
+	inflight.cancel(key)
+}
+
 func Serve(h *Handler) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024) // max 10MB
-	encoder := json.NewEncoder(os.Stdout)
 	log.SetOutput(os.Stderr)
 	log.Println("pty-mcp server started")
 
+	respCh := make(chan response, 64)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		encoder := json.NewEncoder(os.Stdout)
+		for resp := range respCh {
+			if err := encoder.Encode(resp); err != nil {
+				log.Printf("encode error: %v", err)
+			}
+		}
+	}()
+
+	inflight := newInflightRegistry()
+	sem := make(chan struct{}, maxConcurrentToolCalls)
+	var wg sync.WaitGroup
+
+	// The reader loop must never block on anything but stdin itself — a
+	// cancellation notification has to reach handleCancellation immediately
+	// even while another request is still running, or cancelling it is
+	// pointless. So each request's own goroutine acquires the concurrency
+	// semaphore, not this loop.
 	for scanner.Scan() {
-		line := scanner.Bytes()
+		line := append([]byte(nil), scanner.Bytes()...) // scanner reuses its buffer
 		if len(line) == 0 {
 			continue
 		}
@@ -200,21 +319,87 @@ func Serve(h *Handler) {
 			log.Printf("parse error: %v", err)
 			continue
 		}
-		resp := handle(h, &req)
-		if resp.ID == nil && resp.Result == nil && resp.Error == nil {
+
+		if req.Method == "notifications/cancelled" || req.Method == "$/cancelRequest" {
+			handleCancellation(inflight, req.Params)
 			continue
 		}
-		if err := encoder.Encode(resp); err != nil {
-			log.Printf("encode error: %v", err)
+
+		isNotification := len(req.ID) == 0
+		ctx, cancel := context.WithCancel(context.Background())
+
+		var key string
+		var entry *inflightEntry
+		if !isNotification {
+			key = string(req.ID)
+			entry = inflight.add(key, cancel)
 		}
+
+		wg.Add(1)
+		go func(req request) {
+			defer wg.Done()
+			defer cancel()
+
+			if ctx.Err() != nil {
+				// Already cancelled — check explicitly instead of relying on
+				// the select below: if both cases are simultaneously ready,
+				// Go picks between them pseudo-randomly, which could still
+				// run a side-effecting handler despite cancellation.
+				if !isNotification {
+					inflight.finish(key, entry)
+				}
+				return
+			}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				// Cancelled before we even got a concurrency slot: don't run
+				// the handler at all (it may have side effects, e.g.
+				// create_local_session) and don't respond.
+				if !isNotification {
+					inflight.finish(key, entry)
+				}
+				return
+			}
+			defer func() { <-sem }()
+
+			resp := handle(ctx, h, &req)
+			if isNotification {
+				return
+			}
+			if inflight.finish(key, entry) {
+				return // cancelled: MCP spec says don't respond
+			}
+			respCh <- resp
+		}(req)
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		log.Printf("stdin error: %v", err)
 	}
+
+	// A RemoteSession's network read can't be interrupted by ctx cancellation
+	// (see RemoteSession.ReadScreen) — a stalled connection could in theory
+	// keep a goroutine alive forever. Don't let that wedge process shutdown:
+	// give in-flight work a bounded grace period, then exit anyway. We
+	// intentionally leak respCh/writerDone on the timeout path rather than
+	// close them, since a goroutine that eventually does finish must not
+	// send on a closed channel.
+	shutdownDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+		close(respCh)
+		<-writerDone
+	case <-time.After(shutdownGracePeriod):
+		log.Printf("Serve: in-flight requests did not finish within %s, exiting anyway", shutdownGracePeriod)
+	}
 }
 
-func handle(h *Handler, req *request) response {
+func handle(ctx context.Context, h *Handler, req *request) response {
 	switch req.Method {
 	case "initialize":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
@@ -225,15 +410,15 @@ func handle(h *Handler, req *request) response {
 	case "tools/list":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": toolsList}}
 	case "tools/call":
-		return handleToolCall(h, req)
-	case "notifications/initialized", "$/cancelRequest":
+		return handleToolCall(ctx, h, req)
+	case "notifications/initialized":
 		return response{}
 	default:
 		return response{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32601, Message: fmt.Sprintf("method not found: %s", req.Method)}}
 	}
 }
 
-func handleToolCall(h *Handler, req *request) response {
+func handleToolCall(ctx context.Context, h *Handler, req *request) response {
 	var p toolCallParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errResp(req.ID, -32602, err.Error())
@@ -244,37 +429,37 @@ func handleToolCall(h *Handler, req *request) response {
 
 	switch p.Name {
 	case "create_ssh_session":
-		result, err = h.CreateSSHSession(p.Arguments)
+		result, err = h.CreateSSHSession(ctx, p.Arguments)
 	case "create_local_session":
-		result, err = h.CreateLocalSession(p.Arguments)
+		result, err = h.CreateLocalSession(ctx, p.Arguments)
 	case "create_serial_session":
-		result, err = h.CreateSerialSession(p.Arguments)
+		result, err = h.CreateSerialSession(ctx, p.Arguments)
 	case "send_input":
-		result, err = h.SendInput(p.Arguments)
+		result, err = h.SendInput(ctx, p.Arguments)
 	case "read_output":
-		result, err = h.ReadOutput(p.Arguments)
+		result, err = h.ReadOutput(ctx, p.Arguments)
 	case "prepare_secret":
-		result, err = h.PrepareSecret(p.Arguments)
+		result, err = h.PrepareSecret(ctx, p.Arguments)
 	case "send_secret":
-		result, err = h.SendSecret(p.Arguments)
+		result, err = h.SendSecret(ctx, p.Arguments)
 	case "send_control":
-		result, err = h.SendControl(p.Arguments)
+		result, err = h.SendControl(ctx, p.Arguments)
 	case "get_session_state":
-		result, err = h.GetSessionState(p.Arguments)
+		result, err = h.GetSessionState(ctx, p.Arguments)
 	case "list_sessions":
-		result, err = h.ListSessions(p.Arguments)
+		result, err = h.ListSessions(ctx, p.Arguments)
 	case "list_remote_sessions":
-		result, err = h.ListRemoteSessions(p.Arguments)
+		result, err = h.ListRemoteSessions(ctx, p.Arguments)
 	case "close_session":
-		result, err = h.CloseSession(p.Arguments)
+		result, err = h.CloseSession(ctx, p.Arguments)
 	case "detach_session":
-		result, err = h.DetachSession(p.Arguments)
+		result, err = h.DetachSession(ctx, p.Arguments)
 	case "resize_session":
-		result, err = h.ResizeSession(p.Arguments)
+		result, err = h.ResizeSession(ctx, p.Arguments)
 	case "get_credential_bundle":
-		result, err = h.GetCredentialBundle(p.Arguments)
+		result, err = h.GetCredentialBundle(ctx, p.Arguments)
 	case "inject_secret":
-		result, err = h.InjectSecret(p.Arguments)
+		result, err = h.InjectSecret(ctx, p.Arguments)
 	default:
 		return errResp(req.ID, -32601, fmt.Sprintf("unknown tool: %s", p.Name))
 	}
@@ -293,7 +478,7 @@ func handleToolCall(h *Handler, req *request) response {
 	}}
 }
 
-func errResp(id any, code int, msg string) response {
+func errResp(id json.RawMessage, code int, msg string) response {
 	return response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: msg}}
 }
 

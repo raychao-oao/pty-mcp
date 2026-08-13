@@ -514,13 +514,18 @@ func (s *SSHSession) WriteRaw(data string) error {
 	return err
 }
 
-func (s *SSHSession) ReadScreen(timeoutMs int) (string, bool) {
+func (s *SSHSession) ReadScreen(ctx context.Context, timeoutMs int) (string, bool) {
 	if timeoutMs <= 0 {
 		timeoutMs = 5000
 	}
-	output, isComplete := pty.WaitForSettle(func() string {
+	output, isComplete := pty.WaitForSettleCtx(ctx, func() string {
 		return s.buf.Since()
 	}, 300*time.Millisecond, time.Duration(timeoutMs)*time.Millisecond)
+	if ctx.Err() != nil {
+		// Cancelled: this response is suppressed, so don't consume the
+		// output from the read cursor — leave it for the next read.
+		return "", false
+	}
 	s.buf.AdvanceMarkBy(int64(len(output)))
 	return pty.StripANSI(output), isComplete
 }

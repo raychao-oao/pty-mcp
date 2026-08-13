@@ -29,7 +29,7 @@ func (f *fakeSession) ID() string                            { return f.id }
 func (f *fakeSession) Type() string                          { return "local" }
 func (f *fakeSession) Write(input string) error              { f.written = append(f.written, input); return nil }
 func (f *fakeSession) WriteRaw(data string) error            { f.written = append(f.written, data); return nil }
-func (f *fakeSession) ReadScreen(timeoutMs int) (string, bool) { return "", true }
+func (f *fakeSession) ReadScreen(ctx context.Context, timeoutMs int) (string, bool) { return "", true }
 func (f *fakeSession) IsAlive() bool                         { return true }
 func (f *fakeSession) Close() error                          { return nil }
 func (f *fakeSession) Buffer() *buffer.RingBuffer            { return f.rb }
@@ -92,7 +92,7 @@ func TestGetCredentialBundle_ReturnsValidBundle(t *testing.T) {
 	h := newTestHandler(t)
 	params, _ := json.Marshal(map[string]any{"consumer_id": "pty-mcp", "ttl_seconds": 60})
 
-	result, err := h.GetCredentialBundle(params)
+	result, err := h.GetCredentialBundle(context.Background(), params)
 	if err != nil {
 		t.Fatalf("GetCredentialBundle: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestGetCredentialBundle_DefaultConsumerID(t *testing.T) {
 	h := newTestHandler(t)
 	params, _ := json.Marshal(map[string]any{})
 
-	result, err := h.GetCredentialBundle(params)
+	result, err := h.GetCredentialBundle(context.Background(), params)
 	if err != nil {
 		t.Fatalf("GetCredentialBundle: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestGetCredentialBundle_StoresSessionKey(t *testing.T) {
 	h := newTestHandler(t)
 	params, _ := json.Marshal(map[string]any{"ttl_seconds": 60})
 
-	result, _ := h.GetCredentialBundle(params)
+	result, _ := h.GetCredentialBundle(context.Background(), params)
 	bundle := getBundleFromResult(t, result)
 
 	h.credStore.mu.Lock()
@@ -139,8 +139,8 @@ func TestGetCredentialBundle_UniqueSessionIDs(t *testing.T) {
 	h := newTestHandler(t)
 	params, _ := json.Marshal(map[string]any{})
 
-	r1, _ := h.GetCredentialBundle(params)
-	r2, _ := h.GetCredentialBundle(params)
+	r1, _ := h.GetCredentialBundle(context.Background(), params)
+	r2, _ := h.GetCredentialBundle(context.Background(), params)
 	b1 := getBundleFromResult(t, r1)
 	b2 := getBundleFromResult(t, r2)
 	if b1.SessionID == b2.SessionID {
@@ -153,7 +153,7 @@ func TestInjectSecret_RoundTrip(t *testing.T) {
 
 	// Get bundle
 	params, _ := json.Marshal(map[string]any{"ttl_seconds": 60})
-	result, err := h.GetCredentialBundle(params)
+	result, err := h.GetCredentialBundle(context.Background(), params)
 	if err != nil {
 		t.Fatalf("GetCredentialBundle: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestInjectSecret_RoundTrip(t *testing.T) {
 		"pty_session_id": "sess-1",
 		"sealed_box":     json.RawMessage(sealedBoxJSON),
 	})
-	injectResult, err := h.InjectSecret(injectParams)
+	injectResult, err := h.InjectSecret(context.Background(), injectParams)
 	if err != nil {
 		t.Fatalf("InjectSecret: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestInjectSecret_SingleUse(t *testing.T) {
 	h := newTestHandler(t)
 
 	params, _ := json.Marshal(map[string]any{"ttl_seconds": 60})
-	result, _ := h.GetCredentialBundle(params)
+	result, _ := h.GetCredentialBundle(context.Background(), params)
 	bundle := getBundleFromResult(t, result)
 
 	boxExp := time.Now().Add(5 * time.Minute).UTC()
@@ -213,10 +213,10 @@ func TestInjectSecret_SingleUse(t *testing.T) {
 		"sealed_box":     json.RawMessage(sealedBoxJSON),
 	})
 
-	if _, err := h.InjectSecret(injectParams); err != nil {
+	if _, err := h.InjectSecret(context.Background(), injectParams); err != nil {
 		t.Fatalf("first InjectSecret: %v", err)
 	}
-	if _, err := h.InjectSecret(injectParams); err == nil {
+	if _, err := h.InjectSecret(context.Background(), injectParams); err == nil {
 		t.Fatal("expected error on second InjectSecret (session key already consumed)")
 	}
 }
@@ -261,7 +261,7 @@ func TestAudit_GetCredentialBundle_SendsEvent(t *testing.T) {
 	h, ch := newTestHandlerWithAudit(t)
 
 	params, _ := json.Marshal(map[string]any{"consumer_id": "pty-mcp", "ttl_seconds": 60})
-	result, err := h.GetCredentialBundle(params)
+	result, err := h.GetCredentialBundle(context.Background(), params)
 	if err != nil {
 		t.Fatalf("GetCredentialBundle: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestAudit_InjectSecret_SendsSuccessEvent(t *testing.T) {
 
 	// Get bundle — consumes the bundle_generated event
 	params, _ := json.Marshal(map[string]any{"ttl_seconds": 60})
-	result, _ := h.GetCredentialBundle(params)
+	result, _ := h.GetCredentialBundle(context.Background(), params)
 	bundle := getBundleFromResult(t, result)
 	waitAuditEvent(t, ch) // discard bundle_generated
 
@@ -301,7 +301,7 @@ func TestAudit_InjectSecret_SendsSuccessEvent(t *testing.T) {
 		"pty_session_id": "sess-1",
 		"sealed_box":     json.RawMessage(sealedBoxJSON),
 	})
-	if _, err := h.InjectSecret(injectParams); err != nil {
+	if _, err := h.InjectSecret(context.Background(), injectParams); err != nil {
 		t.Fatalf("InjectSecret: %v", err)
 	}
 
@@ -343,7 +343,7 @@ func TestAudit_InjectSecret_SendsFailureEvent(t *testing.T) {
 		"pty_session_id": "sess-1",
 		"sealed_box":     json.RawMessage(boxJSON),
 	})
-	h.InjectSecret(params) //nolint:errcheck — expect error
+	h.InjectSecret(context.Background(), params) //nolint:errcheck — expect error
 
 	m := waitAuditEvent(t, ch)
 	if m["event"] != "inject_failed" {
@@ -373,7 +373,7 @@ func TestInjectSecret_UnknownSessionKey(t *testing.T) {
 		"pty_session_id": "sess-1",
 		"sealed_box":     json.RawMessage(boxJSON),
 	})
-	_, err := h.InjectSecret(params)
+	_, err := h.InjectSecret(context.Background(), params)
 	if err == nil {
 		t.Fatal("expected error for unknown session_id")
 	}
