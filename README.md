@@ -259,7 +259,7 @@ send_input(session_id, "echo $?")         → check build result
 | `resize_session` | Resize the terminal window (rows/cols) for any session type |
 | `list_remote_sessions` | List persistent sessions on a remote host |
 
-> ¹ **`send_secret` platform support**: macOS uses a native password dialog (osascript). WSL2 uses `powershell.exe Get-Credential` (Windows GUI dialog). Linux with a display server uses `zenity` or `kdialog`. Headless Linux falls back to `/dev/tty`. If the operator doesn't respond within 60 seconds, the dialog is dismissed and the call returns a timeout error — it does not fall through to another dialog or wait again, since pty-mcp processes one MCP request at a time and a longer wait would leave the whole session looking unresponsive.
+> ¹ **`send_secret` platform support**: macOS uses a native password dialog (osascript). WSL2 uses `powershell.exe Get-Credential` (Windows GUI dialog). Linux with a display server uses `zenity` or `kdialog`. Headless Linux falls back to `/dev/tty`. If the operator doesn't respond within 60 seconds, the dialog is dismissed and the call returns a timeout error — it does not fall through to another dialog or wait again. Tool calls now run concurrently, so an unanswered dialog no longer blocks other sessions either way; the 60s bound exists so a `send_secret` call itself doesn't sit open indefinitely, and cancelling it (e.g. pressing ESC in Claude Code) dismisses the dialog immediately instead of waiting out the timeout.
 
 ## Audit Log
 
