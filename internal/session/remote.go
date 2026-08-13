@@ -228,7 +228,15 @@ func (r *RemoteSession) WriteRaw(data string) error {
 	return nil
 }
 
-func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
+func (r *RemoteSession) ReadScreen(ctx context.Context, timeoutMs int) (string, bool) {
+	// If already cancelled, don't consume cachedOut (a suppressed response
+	// would drop it) and don't start r.call() below (see its NOTE — once
+	// started it can't be interrupted anyway). Leave everything as-is for
+	// whichever call reads next.
+	if ctx.Err() != nil {
+		return "", false
+	}
+
 	// return cached output from send_input if available
 	r.cacheMu.Lock()
 	if r.cachedOut != nil {
@@ -240,6 +248,8 @@ func (r *RemoteSession) ReadScreen(timeoutMs int) (string, bool) {
 	}
 	r.cacheMu.Unlock()
 
+	// NOTE: r.call() below blocks on a network read (scanner.Scan()) with no
+	// deadline, so it cannot honor ctx cancellation once started.
 	resp, err := r.call("read_output", aitx.ReadOutputParams{
 		SessionID: r.sessionID,
 		TimeoutMs: timeoutMs,
@@ -322,7 +332,7 @@ func (r *RemoteSession) PollRemote(ctx context.Context) {
 			if !r.alive.Load() {
 				return
 			}
-			r.ReadScreen(500) // short timeout, result written to localBuf
+			r.ReadScreen(ctx, 500) // short timeout, result written to localBuf
 		}
 	}
 }

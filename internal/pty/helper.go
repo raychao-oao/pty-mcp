@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"time"
@@ -69,6 +70,47 @@ func WaitForSettle(getOutput func() string, settle, timeout time.Duration) (stri
 		}
 
 		// Only settle when we've seen some output — empty doesn't count
+		if hasOutput && time.Since(lastChange) >= settle {
+			return current, true
+		}
+
+		if hasOutput && HasPrompt(StripANSI(current)) {
+			return current, true
+		}
+	}
+
+	return getOutput(), false
+}
+
+// WaitForSettleCtx is WaitForSettle with early exit when ctx is cancelled (e.g. the
+// MCP client sent notifications/cancelled for this request). On cancellation it
+// returns immediately with isComplete=false, same as a timeout.
+func WaitForSettleCtx(ctx context.Context, getOutput func() string, settle, timeout time.Duration) (string, bool) {
+	deadline := time.Now().Add(timeout)
+	last := getOutput()
+	lastChange := time.Now()
+	hasOutput := last != ""
+
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return getOutput(), false
+		case <-timer.C:
+		}
+		timer.Reset(50 * time.Millisecond)
+
+		current := getOutput()
+
+		if current != last {
+			last = current
+			lastChange = time.Now()
+			hasOutput = hasOutput || current != ""
+			continue
+		}
+
 		if hasOutput && time.Since(lastChange) >= settle {
 			return current, true
 		}

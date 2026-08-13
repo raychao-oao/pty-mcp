@@ -17,7 +17,7 @@ type Session interface {
 	Type() string // "ssh" | "serial" | "local" | "remote"
 	Write(input string) error    // send a command (newline appended automatically)
 	WriteRaw(data string) error  // send raw data (no newline, used for control keys)
-	ReadScreen(timeoutMs int) (output string, isComplete bool)
+	ReadScreen(ctx context.Context, timeoutMs int) (output string, isComplete bool)
 	IsAlive() bool
 	Close() error
 	Buffer() *buffer.RingBuffer
@@ -45,6 +45,8 @@ type Manager struct {
 	idleTimeout    time.Duration
 	secretMu       sync.Mutex
 	pendingSecrets map[string]PendingSecret
+	lockMu         sync.Mutex
+	sessionLocks   map[string]chan struct{} // per-session operation lock, buffered(1)
 }
 
 // NewManager creates a SessionManager; idleSeconds is the idle timeout in seconds (0 means no timeout)
@@ -54,6 +56,7 @@ func NewManager(idleSeconds int) *Manager {
 		infos:          make(map[string]Info),
 		idleTimeout:    time.Duration(idleSeconds) * time.Second,
 		pendingSecrets: make(map[string]PendingSecret),
+		sessionLocks:   make(map[string]chan struct{}),
 	}
 	if idleSeconds > 0 {
 		go m.idleReaper()
@@ -195,6 +198,46 @@ func (m *Manager) Detach(id string) error {
 	}
 	// non-remote sessions cannot be detached, close directly
 	return s.Close()
+}
+
+// LockSession acquires the per-session operation lock, serializing stateful
+// tool calls (write/read/resize/...) on the same session while letting calls
+// on different sessions run concurrently. Returns ctx.Err() if ctx is
+// cancelled while queued behind another in-flight operation on this session.
+func (m *Manager) LockSession(ctx context.Context, id string) error {
+	select {
+	case m.sessionLockChan(id) <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// UnlockSession releases the lock acquired by LockSession. Must be called
+// exactly once per successful LockSession call, typically via defer.
+func (m *Manager) UnlockSession(id string) {
+	select {
+	case <-m.sessionLockChan(id):
+	default:
+	}
+}
+
+// sessionLockChan returns the (lazily created) lock channel for id. Entries
+// are intentionally never removed: a session id is never reused, and a
+// waiter that's queued on this exact channel object must always be able to
+// eventually acquire it. Deleting the map entry while a waiter is queued
+// would orphan that waiter on a channel nobody will ever unlock again,
+// deadlocking it (and Serve's shutdown wg.Wait()) permanently. The memory
+// cost is one small buffered channel per session ever created — negligible.
+func (m *Manager) sessionLockChan(id string) chan struct{} {
+	m.lockMu.Lock()
+	defer m.lockMu.Unlock()
+	ch, ok := m.sessionLocks[id]
+	if !ok {
+		ch = make(chan struct{}, 1)
+		m.sessionLocks[id] = ch
+	}
+	return ch
 }
 
 // PendingSecret holds a pre-staged secret and its line ending.

@@ -3,6 +3,7 @@ package aitx
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -219,14 +220,20 @@ func (s *PTYSession) WriteRaw(data string) error {
 	return err
 }
 
-func (s *PTYSession) ReadScreen(timeoutMs int) (string, bool) {
+func (s *PTYSession) ReadScreen(ctx context.Context, timeoutMs int) (string, bool) {
 	if timeoutMs <= 0 {
 		timeoutMs = 5000
 	}
 	s.lastUsed.Store(time.Now())
-	output, isComplete := ptyhelper.WaitForSettle(func() string {
+	output, isComplete := ptyhelper.WaitForSettleCtx(ctx, func() string {
 		return s.buf.Since()
 	}, 300*time.Millisecond, time.Duration(timeoutMs)*time.Millisecond)
+	if ctx.Err() != nil {
+		// Cancelled: this response will never be delivered (the server
+		// suppresses it), so don't consume the output from the read
+		// cursor — leave it for whichever call reads next.
+		return "", false
+	}
 	s.buf.AdvanceMarkBy(int64(len(output)))
 	return ptyhelper.StripANSI(output), isComplete
 }
