@@ -2,6 +2,7 @@
 package mcp
 
 import (
+	"context"
 	"bufio"
 	"encoding/json"
 	"io"
@@ -91,7 +92,7 @@ func TestSendInput_RemoteSession_WaitFor(t *testing.T) {
 		WaitForTimeout: 5,
 	})
 
-	result, err := h.SendInput(json.RawMessage(raw))
+	result, err := h.SendInput(context.Background(), json.RawMessage(raw))
 	if err != nil {
 		t.Fatalf("SendInput: %v", err)
 	}
@@ -153,7 +154,7 @@ func TestSendControl_RemoteSession_OutputAvailable(t *testing.T) {
 		Raw:       true,
 	})
 
-	result, err := h.SendInput(json.RawMessage(raw))
+	result, err := h.SendInput(context.Background(), json.RawMessage(raw))
 	if err != nil {
 		t.Fatalf("SendInput(ctrl+c): %v", err)
 	}

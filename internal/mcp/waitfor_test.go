@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -11,7 +12,9 @@ func TestWaitForPattern_ImmediateMatch(t *testing.T) {
 	rb := buffer.NewRingBuffer(1024)
 	rb.Write([]byte("line1\nline2\nhello world\nline4\n"))
 
-	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return true }, WaitForParams{
 		WaitFor:      "hello",
 		Timeout:      5 * time.Second,
 		ContextLines: 1,
@@ -32,7 +35,9 @@ func TestWaitForPattern_Timeout(t *testing.T) {
 	rb := buffer.NewRingBuffer(1024)
 	rb.Write([]byte("nothing here\n"))
 
-	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return true }, WaitForParams{
 		WaitFor:   "missing",
 		Timeout:   300 * time.Millisecond,
 		TailLines: 5,
@@ -57,7 +62,9 @@ func TestWaitForPattern_AsyncMatch(t *testing.T) {
 		rb.Write([]byte("waiting...\nserver ready\n"))
 	}()
 
-	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return true }, WaitForParams{
 		WaitFor: "ready",
 		Timeout: 2 * time.Second,
 	})
@@ -74,7 +81,9 @@ func TestWaitForPattern_InvalidRegexFallback(t *testing.T) {
 	rb := buffer.NewRingBuffer(1024)
 	rb.Write([]byte("test [invalid regex\n"))
 
-	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return true }, WaitForParams{
 		WaitFor: "[invalid",
 		Timeout: 1 * time.Second,
 	})
@@ -96,7 +105,9 @@ func TestWaitForPattern_PartialLine(t *testing.T) {
 		rb.Write([]byte("word: \n"))
 	}()
 
-	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return true }, WaitForParams{
 		WaitFor: "password:",
 		Timeout: 2 * time.Second,
 	})
@@ -113,7 +124,9 @@ func TestWaitForPattern_SkipsStaleData(t *testing.T) {
 	rb.Mark() // ReadScreen advances mark past old data
 
 	// Now wait_for should NOT match the old "SUCCESS"
-	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return true }, WaitForParams{
 		WaitFor: "SUCCESS",
 		Timeout: 300 * time.Millisecond,
 	})
@@ -138,7 +151,9 @@ func TestWaitForPattern_MatchesNewDataAfterMark(t *testing.T) {
 		rb.Write([]byte("new SUCCESS here\n"))
 	}()
 
-	result := waitForPattern(rb, func() bool { return true }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return true }, WaitForParams{
 		WaitFor: "SUCCESS",
 		Timeout: 2 * time.Second,
 	})
@@ -163,7 +178,9 @@ func TestWaitForPattern_SessionDead(t *testing.T) {
 		rb.Write([]byte("final\n"))
 	}()
 
-	result := waitForPattern(rb, func() bool { return alive }, WaitForParams{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := waitForPattern(ctx, rb, func() bool { return alive }, WaitForParams{
 		WaitFor:   "never_match",
 		Timeout:   2 * time.Second,
 		TailLines: 10,

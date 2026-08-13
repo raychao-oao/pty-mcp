@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -79,7 +80,7 @@ type GetCredentialBundleParams struct {
 
 // GetCredentialBundle generates a signed ConsumerBundle for HPKE-sealed credential delivery.
 // The bundle's public keys are safe to pass to cred-mcp; the session private key stays in memory.
-func (h *Handler) GetCredentialBundle(params json.RawMessage) (any, error) {
+func (h *Handler) GetCredentialBundle(ctx context.Context, params json.RawMessage) (any, error) {
 	var p GetCredentialBundleParams
 	if err := UnmarshalMcpArgs(params, &p); err != nil {
 		return nil, err
@@ -94,7 +95,13 @@ func (h *Handler) GetCredentialBundle(params json.RawMessage) (any, error) {
 		p.TTLSeconds = 3600
 	}
 
+	// Two concurrent first-time calls could otherwise both observe no key
+	// file yet, each generate a distinct identity, and race writing it —
+	// bundles get signed by whichever identity lost, and everything else
+	// only trusts whichever won the write, breaking identity-based auth.
+	h.identityKeyMu.Lock()
 	ik, err := consumersdk.LoadOrGenerateIdentityKey(h.identityKeyPath)
+	h.identityKeyMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("identity key: %w", err)
 	}
@@ -129,7 +136,7 @@ func (h *Handler) GetCredentialBundle(params json.RawMessage) (any, error) {
 
 // InjectSecret decrypts a SealedBox from cred-mcp and writes the plaintext directly into a PTY
 // session. The plaintext never appears in the tool result — only {"success":true} is returned.
-func (h *Handler) InjectSecret(params json.RawMessage) (any, error) {
+func (h *Handler) InjectSecret(ctx context.Context, params json.RawMessage) (any, error) {
 	var raw struct {
 		PtySessionID string          `json:"pty_session_id"`
 		SealedBox    json.RawMessage `json:"sealed_box"`
@@ -141,6 +148,28 @@ func (h *Handler) InjectSecret(params json.RawMessage) (any, error) {
 	var box credproto.SealedBox
 	if err := json.Unmarshal(raw.SealedBox, &box); err != nil {
 		return nil, fmt.Errorf("sealed_box: %w", err)
+	}
+
+	s, err := h.mgr.Get(raw.PtySessionID)
+	if err != nil {
+		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, err.Error())
+		return nil, err
+	}
+	// Acquire the (cancelable) session lock BEFORE consuming the single-use
+	// credential. If this call is cancelled while queued behind another
+	// operation on the same session, credStore.take must not have run yet —
+	// otherwise the credential is burned with nothing written, and retrying
+	// with the same sealed box fails as "already used" for no reason.
+	if err := h.mgr.LockSession(ctx, raw.PtySessionID); err != nil {
+		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, err.Error())
+		return nil, err
+	}
+	defer h.mgr.UnlockSession(raw.PtySessionID)
+	// Re-fetch: the session could have been closed while queued for the lock
+	// above. Check before burning the single-use credential below.
+	if s, err = h.mgr.Get(raw.PtySessionID); err != nil {
+		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, err.Error())
+		return nil, err
 	}
 
 	cred, ok := h.credStore.take(box.SessionID)
@@ -162,10 +191,11 @@ func (h *Handler) InjectSecret(params json.RawMessage) (any, error) {
 		}
 	}()
 
-	s, err := h.mgr.Get(raw.PtySessionID)
-	if err != nil {
-		h.sendInjectAudit("inject_failed", box.ConsumerID, box.SessionID, raw.PtySessionID, box.ItemID, box.Purpose, err.Error())
-		return nil, err
+	if ctx.Err() != nil {
+		// Caller gave up while we were decrypting. The credential is
+		// already consumed at this point (can't un-burn a single-use
+		// credential), but at least don't write it into the PTY.
+		return nil, ctx.Err()
 	}
 	if err := s.WriteRaw(string(plaintext) + "\r"); err != nil {
 		wrapped := fmt.Errorf("write to session: %w", err)
