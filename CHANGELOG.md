@@ -2,6 +2,15 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.7] - 2026-08-13
+
+### Fixed
+- Cancelling an in-progress tool call (e.g. pressing ESC in Claude Code) used to hang the rest of the session: pty-mcp processed one JSON-RPC request at a time on a fully synchronous loop, so the cancelled call kept running to its full bounded timeout (up to 600s) and every *other* tool call — even on a different session — queued behind it unable to run. The server now handles requests concurrently, and MCP's `notifications/cancelled` is honored for real: a cancelled call's underlying wait is interrupted and its resources released within seconds instead of waiting out the original timeout, while unrelated sessions were never blocked in the first place. Different sessions run in parallel; operations on the same session remain serialized to avoid races introduced by the new concurrency (a per-session operation lock, itself cancellable while queued).
+- `send_secret`'s macOS dialog rendered non-ASCII prompts (e.g. Chinese) as mojibake. The prompt text was passed through an environment variable and read back via AppleScript's `system attribute`, which doesn't decode it as UTF-8. It's now interpolated directly into the (escaped) AppleScript source instead, matching how the WSL2/PowerShell dialog already handled this.
+
+### Known limitation
+- SSH-based remote session reads and listing (`ai-tmux` RPC over an existing SSH connection) still can't be interrupted mid-flight once the underlying network read has started — cancelling stops it from blocking other tool calls immediately, but the read itself keeps running until it naturally completes or times out. Fixing this needs the remote transport reworked around context-aware deadlines, planned as a separate follow-up.
+
 ## [v0.11.6] - 2026-08-11
 
 ### Fixed
