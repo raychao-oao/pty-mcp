@@ -10,7 +10,7 @@ if [ -z "${CLAUDE_PLUGIN_ROOT}" ]; then
     exit 1
 fi
 
-VERSION="v0.11.7"
+VERSION="v0.11.8"
 REPO="raychao-oao/pty-mcp"
 BIN_DIR="${CLAUDE_PLUGIN_ROOT}/bin"
 BIN_PATH="${BIN_DIR}/pty-mcp"
