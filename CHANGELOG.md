@@ -2,6 +2,11 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.8] - 2026-08-17
+
+### Fixed
+- MCP `initialize` handshake declared a hardcoded `protocolVersion` of `2024-11-05` — the original MCP spec, four generations behind current — regardless of what the client requested. Bumped to `2025-11-25`, matching the version other in-house MCP servers built on official SDKs already negotiate. pty-mcp's stdio-only transport gets no network-visibility benefit from the newer 2026-07-28 stateless spec (that revision targets HTTP transport intermediaries), so this targets the current stateful version rather than the latest one.
+
 ## [v0.11.7] - 2026-08-13
 
 ### Fixed
