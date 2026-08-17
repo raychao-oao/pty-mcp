@@ -403,7 +403,7 @@ func handle(ctx context.Context, h *Handler, req *request) response {
 	switch req.Method {
 	case "initialize":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": "2025-11-25",
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "pty-mcp", "version": Version},
 		}}
