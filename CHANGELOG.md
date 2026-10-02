@@ -2,6 +2,14 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.10] - 2026-10-02
+
+### Fixed
+- MCP `initialize` always answered with a hardcoded `protocolVersion` (`2025-11-25`) no matter what the client requested. Strict clients such as the official MCP TypeScript SDK abort the handshake with "Unsupported protocol version" when the server returns a version they did not ask for. `initialize` now follows the spec's negotiation rule: echo the client's version when pty-mcp supports it (`2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, `2024-10-07`), otherwise respond with the newest supported one.
+
+### Credits
+- Thanks to [@schaepher](https://github.com/schaepher) for finding and fixing this in their fork ([schaepher/pty-mcp@9097208](https://github.com/schaepher/pty-mcp/commit/9097208451a5d206121e3593a0c350b0e62bf369)). The change was cherry-picked with original authorship preserved; only its test was adapted to this repo's stdio-only transport.
+
 ## [v0.11.9] - 2026-09-09
 
 ### Fixed

@@ -67,19 +67,19 @@ var toolsList = []map[string]any{
 			"password":        map[string]any{"type": "string", "description": "Optional if using key auth"},
 			"key_path":        map[string]any{"type": "string", "description": "SSH private key path (default: ~/.ssh/id_ed25519, id_rsa)"},
 			"ignore_host_key": map[string]any{"type": "boolean", "description": "Skip known_hosts check (not recommended)"},
-			"persistent": map[string]any{"type": "boolean", "description": "Use ai-tmux for persistent session (survives SSH disconnect)"},
-			"command":    map[string]any{"type": "string", "description": "Initial command for persistent session (default: /bin/bash)"},
-			"session_id": map[string]any{"type": "string", "description": "Attach to existing ai-tmux session by ID (use list_remote_sessions to find IDs)"},
-			"log_file":      map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size (e.g. long-running scripts). File is created if it doesn't exist."},
-			"log_max_size":  map[string]any{"type": "integer", "description": "Max log file size in MB before rotation (0 = no rotation, default: 0)"},
-			"log_max_files": map[string]any{"type": "integer", "description": "Max number of rotated log files to keep (default: 3)"},
+			"persistent":      map[string]any{"type": "boolean", "description": "Use ai-tmux for persistent session (survives SSH disconnect)"},
+			"command":         map[string]any{"type": "string", "description": "Initial command for persistent session (default: /bin/bash)"},
+			"session_id":      map[string]any{"type": "string", "description": "Attach to existing ai-tmux session by ID (use list_remote_sessions to find IDs)"},
+			"log_file":        map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size (e.g. long-running scripts). File is created if it doesn't exist."},
+			"log_max_size":    map[string]any{"type": "integer", "description": "Max log file size in MB before rotation (0 = no rotation, default: 0)"},
+			"log_max_files":   map[string]any{"type": "integer", "description": "Max number of rotated log files to keep (default: 3)"},
 		},
 		"required": []string{"host", "user"},
 	}},
 	{"name": "create_local_session", "description": "Open a local interactive terminal session (bash, python3, node, etc.). WARNING: Executes as the current user with full local system access — this is by design for legitimate sysadmin automation. Only use on trusted systems.", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"command":  map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
+			"command":       map[string]any{"type": "string", "description": "Command to run (default: /bin/bash). Examples: /bin/bash, python3, node"},
 			"log_file":      map[string]any{"type": "string", "description": "File path to append all session output. Useful when output may exceed buffer size. File is created if it doesn't exist."},
 			"log_max_size":  map[string]any{"type": "integer", "description": "Max log file size in MB before rotation (0 = no rotation, default: 0)"},
 			"log_max_files": map[string]any{"type": "integer", "description": "Max number of rotated log files to keep (default: 3)"},
@@ -88,8 +88,8 @@ var toolsList = []map[string]any{
 	{"name": "create_serial_session", "description": "Open a serial port session. Device path must start with /dev/tty or /dev/cu. (e.g. /dev/ttyUSB0, /dev/cu.usbserial-XXXX)", "inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"device":    map[string]any{"type": "string", "description": "Serial device path (must start with /dev/tty or /dev/cu.)"},
-			"baud_rate": map[string]any{"type": "integer", "description": "Baud rate (default: 9600)"},
+			"device":        map[string]any{"type": "string", "description": "Serial device path (must start with /dev/tty or /dev/cu.)"},
+			"baud_rate":     map[string]any{"type": "integer", "description": "Baud rate (default: 9600)"},
 			"log_file":      map[string]any{"type": "string", "description": "File path to append all session output. File is created if it doesn't exist."},
 			"log_max_size":  map[string]any{"type": "integer", "description": "Max log file size in MB before rotation (0 = no rotation, default: 0)"},
 			"log_max_files": map[string]any{"type": "integer", "description": "Max number of rotated log files to keep (default: 3)"},
@@ -139,9 +139,9 @@ var toolsList = []map[string]any{
 		"required": []string{"session_id"},
 	}},
 	{"name": "send_control", "description": "Send a control key (ctrl+c, ctrl+d, enter, tab, up, down, etc.)", "inputSchema": map[string]any{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}, "key": map[string]any{"type": "string"}},
-		"required": []string{"session_id", "key"},
+		"required":   []string{"session_id", "key"},
 	}},
 	{"name": "get_session_state", "description": "Get detailed state of a session: type, target, is_alive, cursor, and classified state (at_prompt/password_prompt/confirmation/pager/running/unknown), awaiting_secret, last_prompt. Use cursor with read_output(since_cursor=...) for incremental reads.", "inputSchema": map[string]any{
 		"type": "object",
@@ -165,14 +165,14 @@ var toolsList = []map[string]any{
 		"required": []string{"host", "user"},
 	}},
 	{"name": "close_session", "description": "Close a session (also terminates remote PTY)", "inputSchema": map[string]any{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
-		"required": []string{"session_id"},
+		"required":   []string{"session_id"},
 	}},
 	{"name": "detach_session", "description": "Detach from a persistent session but keep the remote PTY running (reattach via list_remote_sessions + session_id)", "inputSchema": map[string]any{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]any{"session_id": map[string]any{"type": "string"}},
-		"required": []string{"session_id"},
+		"required":   []string{"session_id"},
 	}},
 	{"name": "resize_session", "description": "Resize the terminal window (rows x cols) for a session. Affects how TUI tools (top, less, vim, etc.) lay out output. Serial sessions are not supported.", "inputSchema": map[string]any{
 		"type": "object",
@@ -399,11 +399,45 @@ func Serve(h *Handler) {
 	}
 }
 
+// serverProtocolVersion is the newest MCP revision this server implements. It
+// is offered only when the client requests something we do not recognize.
+const serverProtocolVersion = "2025-11-25"
+
+// supportedProtocolVersions lists the MCP revisions this server can speak,
+// newest first. Returning a version the client did not ask for makes strict
+// clients (e.g. the TypeScript SDK) fail with "Unsupported protocol version",
+// so initialize echoes the client's choice whenever it is in this list.
+var supportedProtocolVersions = []string{
+	"2025-11-25",
+	"2025-06-18",
+	"2025-03-26",
+	"2024-11-05",
+	"2024-10-07",
+}
+
+// negotiateProtocolVersion returns the protocol version to use for a session.
+// Per the MCP spec, the server echoes the client's requested version when it
+// supports it and otherwise responds with its own latest supported version.
+func negotiateProtocolVersion(params json.RawMessage) string {
+	var p struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &p)
+	}
+	for _, v := range supportedProtocolVersions {
+		if v == p.ProtocolVersion {
+			return v
+		}
+	}
+	return serverProtocolVersion
+}
+
 func handle(ctx context.Context, h *Handler, req *request) response {
 	switch req.Method {
 	case "initialize":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-			"protocolVersion": "2025-11-25",
+			"protocolVersion": negotiateProtocolVersion(req.Params),
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "pty-mcp", "version": Version},
 		}}
