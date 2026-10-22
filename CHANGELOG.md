@@ -2,7 +2,10 @@
 
 All notable changes to pty-mcp are documented here.
 
-## [Unreleased]
+## [v0.11.12] - 2026-10-22
+
+### Security
+- Bumped `github.com/raychao-oao/cred-proto` v0.1.0 → v0.1.1, which is built on go1.27.3. The module's `go` directive is now 1.27.3, so release binaries use the go1.27.3 standard library (includes the `crypto/x509` fix GO-2026-6809).
 
 ### Added
 - CI workflow (`.github/workflows/ci.yml`): `go vet` + `go test` and a `govulncheck` scan on every push/PR to `develop`/`main`, plus a weekly scheduled scan so newly published advisories surface without a commit.
