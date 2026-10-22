@@ -2,6 +2,11 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [v0.11.11] - 2026-10-22
+
+### Security
+- Rebuilt against patched toolchain and dependencies after `govulncheck` reported 10 reachable vulnerabilities. Bumped `golang.org/x/crypto` v0.51.0 → v0.56.0 (nine advisories in `crypto/ssh`, e.g. GO-2026-5013/5015/5017 — panics and a deadlock on the SSH connection path — plus GO-2026-6354/6355), with `x/sys` and `x/term` following. Raised the minimum Go to 1.26.10 so release binaries pick up the standard-library fix for `crypto/x509` (GO-2026-6809, fixed in go1.26.10 / go1.27.3). `govulncheck ./...` now reports no affected vulnerabilities.
+
 ## [v0.11.10] - 2026-10-02
 
 ### Fixed

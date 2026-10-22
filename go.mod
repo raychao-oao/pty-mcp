@@ -1,6 +1,6 @@
 module github.com/raychao-oao/pty-mcp
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/creack/pty v1.1.24
@@ -8,12 +8,12 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/raychao-oao/cred-proto v0.1.0
 	go.bug.st/serial v1.6.4
-	golang.org/x/crypto v0.51.0
-	golang.org/x/term v0.43.0
+	golang.org/x/crypto v0.56.0
+	golang.org/x/term v0.45.0
 )
 
 require (
 	github.com/creack/goselect v0.1.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )
