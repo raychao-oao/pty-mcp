@@ -2,6 +2,11 @@
 
 All notable changes to pty-mcp are documented here.
 
+## [Unreleased]
+
+### Added
+- CI workflow (`.github/workflows/ci.yml`): `go vet` + `go test` and a `govulncheck` scan on every push/PR to `develop`/`main`, plus a weekly scheduled scan so newly published advisories surface without a commit.
+
 ## [v0.11.11] - 2026-10-22
 
 ### Security
