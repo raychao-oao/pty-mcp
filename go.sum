@@ -10,8 +10,8 @@ github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyua
 github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/raychao-oao/cred-proto v0.1.0 h1:V9f+ClZEZzDE9YwCBu+EJX5y2fIIKBsKrJNtkWW3MhY=
-github.com/raychao-oao/cred-proto v0.1.0/go.mod h1:MK2HWk1wIs7Yj7af4Q+4ZY+yds98WzmhJk7FdNc6F2s=
+github.com/raychao-oao/cred-proto v0.1.1 h1:g8OLBN5ly5aiz4IFNQoJtLQKP/+ZE5fNFJ+E667LXSY=
+github.com/raychao-oao/cred-proto v0.1.1/go.mod h1:pm+woVSToloy6WQLVcxEAEHc1+banyzl+7O8ZUj4J0I=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 go.bug.st/serial v1.6.4 h1:7FmqNPgVp3pu2Jz5PoPtbZ9jJO5gnEnZIvnI1lzve8A=
